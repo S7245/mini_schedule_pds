@@ -187,7 +187,7 @@ Platform（平台层）
 | `role:read` | 查看角色列表和权限配置 |
 | `role:write` | 创建/编辑/删除自定义角色 |
 | `course:read` | 查看课程模板 |
-| `course:write` | 创建/编辑/发布/下架课程模板 |
+| `course:write` | 创建/编辑/发布/下架课程模板；设置课程的门店可用性（CourseStoreAvailability） |
 | `course:delete` | 删除课程模板 |
 | `session:read` | 查看全部课次（受数据权限过滤） |
 | `session:own` | 仅查看自己作为教练的课次（Coach 专用） |
@@ -307,6 +307,7 @@ Platform（平台层）
 | 创建课程模板 | course:write |
 | 编辑课程信息 | course:write |
 | 发布/下架课程 | course:write |
+| 设置课程可用门店（CourseStoreAvailability） | course:write | 仅 brand_admin；store_manager 排课时只能看到本门店已启用的课程 |
 | 删除课程模板 | course:delete |
 
 #### 排课管理

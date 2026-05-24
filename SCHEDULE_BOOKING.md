@@ -62,7 +62,8 @@ Mini Schedule 当前 MVP 已具备品牌入驻、Learner 管理、课程管理�
 |---|---|
 | Store（门店） | Brand 旗下的实体经营场所；一个 Brand 可以有多个 Store |
 | Room（场地） | Store 内的物理空间，有名称和容量限制（最大人数） |
-| CourseTemplate（课程模板） | 课程的基础定义，描述课程内容，不绑定时间；对应现有 `Course` 表 |
+| CourseTemplate（课程模板） | 课程的基础定义，描述课程内容，不绑定时间；对应现有 `courses` 表；归属品牌级，不挂 store_id |
+| CourseStoreAvailability（课程门店可用性） | 控制某个 CourseTemplate 在哪些 Store 可以被用于排课的关联关系；默认不可用，需显式启用 |
 | Session（课次） | 基于 CourseTemplate 的一次具体排课，有确定的开始时间、教练和场地 |
 | Booking（预约） | Learner 对某个 Session 的预约记录 |
 | Waitlist（候补） | Session 满员后的候补队列，按加入顺序排序 |
@@ -124,6 +125,7 @@ Brand
 
 Brand
   └── CourseTemplate（课程模板，0..n）
+        └── CourseStoreAvailability（可用门店，0..n）→ Store
 
 Session（课次）
   ├── brand_id       → Brand
@@ -283,6 +285,29 @@ created_at      timestamptz not null default now()
 updated_at      timestamptz not null default now()
 ```
 
+#### `course_store_availability`
+
+CourseTemplate 归属品牌级，通过此表控制哪些门店可以用该课程排课。创建课程时 brand_admin 选择可用门店（默认全选），对应记录写入此表（`is_available = true`）。无记录或 `is_available = false` 表示该门店不能使用此课程排课。
+
+```sql
+id              bigserial primary key
+brand_id        bigint not null references brands(id)
+course_id       bigint not null references courses(id) on delete cascade
+store_id        bigint not null references stores(id) on delete cascade
+is_available    boolean not null default true
+created_at      timestamptz not null default now()
+updated_at      timestamptz not null default now()
+
+unique (course_id, store_id)
+```
+
+**索引：** `(course_id)`, `(store_id)`, `(brand_id)`
+
+**默认行为：**
+- brand_admin 创建课程时，UI 提供门店多选（默认全选当前所有有效门店）
+- 新增门店后，不自动继承已有课程可用性，需 brand_admin 手动配置
+- store_manager 查看可用课程列表时，后端只返回该门店 `is_available = true` 的课程
+
 ---
 
 ## 5. 功能规格 — Phase 1
@@ -306,6 +331,16 @@ updated_at      timestamptz not null default now()
 | 编辑场地 | 更新名称/容量；容量变更不影响已排课次的 `capacity` 字段 |
 | 停用场地 | 场地状态改为 `inactive`；已排未完成课次保持有效 |
 | 查询场地列表 | 按门店筛选，返回当前 Brand 下的场地 |
+
+#### 课程门店可用性管理（Brand Backoffice）
+
+由 brand_admin 在课程详情页配置，控制该课程可在哪些门店排课。
+
+| 操作 | 说明 |
+|---|---|
+| 创建课程时配置可用门店 | 课程创建表单中包含门店多选组件，默认全选所有有效门店；提交时为每个选中门店写入 `course_store_availability` 记录 |
+| 编辑可用门店 | 在课程详情页可随时增减可用门店；移除门店后，该门店已排的历史 Session 不受影响 |
+| store_manager 查看可用课程 | 排课时课程选择器仅展示本门店 `is_available = true` 的课程，不可见其他课程 |
 
 **冲突检测**：创建/编辑 Session 时，后端校验同一 Room 在所选时间段内（starts_at, ends_at）是否已有状态为 `scheduled` 或 `in_progress` 的课次，有则返回错误。
 
@@ -331,6 +366,7 @@ updated_at      timestamptz not null default now()
 2. Coach 时间冲突检测（同一 Coach 同时间是否已有课次）。
 3. starts_at 必须在当前时间之后。
 4. ends_at > starts_at。
+5. 课程门店可用性校验：`course_store_availability` 中存在 `course_id = ? AND store_id = ? AND is_available = true`，否则返回 422「该课程未在目标门店启用，请先在课程设置中添加该门店」。
 
 #### 5.2.2 循环排课
 
@@ -552,6 +588,13 @@ POST   /sessions/:id/check-in   Coach 确认签到
 PUT    /bookings/:id/no-show    Coach 标记爽约
 ```
 
+#### 课程管理
+
+```
+GET    /courses/:id/store-availability         查看课程可用门店列表
+PUT    /courses/:id/store-availability         更新课程可用门店（全量替换）
+```
+
 #### 预约规则
 
 ```
@@ -662,6 +705,7 @@ waiting ──(课次取消)──> cancelled
 | 候补确认限时 | 30 分钟（固定，不可配置） | waitlist_confirm_minutes 字段保留但 Phase 1 UI 不暴露配置入口 |
 | 爽约惩罚 | 扣减次卡次数 | 标记爽约时自动扣减有效次卡 1 次；无次卡时仅记录 |
 | 过渡收款方案 | Phase 3 前接受线下/手动收款 | Phase 1 不需要"手动开课包"操作入口 |
+| D-10 课程模板归属层级 | 品牌级 + 门店可用性控制 | `courses` 表保持 brand_id，新增 `course_store_availability` 表控制哪些门店可用哪些课程；排课时校验课程是否在目标门店启用 |
 
 ---
 
