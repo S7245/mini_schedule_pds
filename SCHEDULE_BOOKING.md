@@ -422,6 +422,8 @@ Learner App 展示当前 Brand 下状态为 `scheduled` 的 Session 列表，并
 
 流程：
 
+**Phase 1 流程（免费预约，不消耗卡券）：**
+
 1. Learner 选择 Session，点击预约。
 2. 后端校验：
    - Session 状态为 `scheduled`。
@@ -433,7 +435,12 @@ Learner App 展示当前 Brand 下状态为 `scheduled` 的 Session 列表，并
 3. 创建 Booking（status: `confirmed`），booked_count +1。
 4. 发送预约成功通知。
 
-Phase 1 预约为免费，不消耗会员卡/次卡。
+**Phase 2 起，在步骤 2 通过后、步骤 3 之前，增加用卡校验步骤：**
+
+2.5. 用卡校验（详见 `MEMBERSHIP.md §5.3`）：
+   - 查找学员持有的、对该 Session 的 store_id + course_id 均匹配的有效卡。
+   - 若无匹配卡 → 返回 422「无可用卡券，请先购买课程包」，不创建 Booking。
+   - 若有匹配卡 → 完成预约后扣减 1 次（写 membership_transactions）。
 
 #### 5.3.3 取消预约
 
@@ -670,7 +677,10 @@ waiting ──(课次取消)──> cancelled
 
 ### Phase 2 — 增强
 
-8. 会员卡/次卡/课包体系（预约消耗权益）
+8. 会员卡/次卡/课包体系（预约消耗权益）— 完整设计见 `MEMBERSHIP.md`
+   - 支持按门店范围（brand / store_specific）+ 课程范围（all / course_specific）控制用卡范围
+   - 预约时校验匹配卡并扣减；取消退还；课次取消批量退还；爽约扣减
+   - 后台手动开卡（receptionist / brand_admin）；Learner App「我的权益」页
 9. 员工多角色权限控制（Coach / Receptionist / Operations）
 10. 代客预约（Brand Staff 帮学员预约）
 11. 微信小程序/抖音小程序通知接入（需对应 AppID）

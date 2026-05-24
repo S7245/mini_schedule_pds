@@ -682,18 +682,21 @@ Learner 是单一身份，无角色差异。`app_users.vip_level` 字段用于 P
 | app_users | status | active / inactive |
 | app_users | vip_level | 0（普通）/ 1（VIP，Phase 2 扩展） |
 
-## 附录 B：会员服务 Phase 2 数据模型（预留）
+## 附录 B：会员服务 Phase 2 数据模型（详见 MEMBERSHIP.md）
 
-```
-membership_products（会员卡产品）
-  brand_id, name, type(class_pack/time_pass/course_bundle/pt_pack),
-  price, credits, duration_days, valid_for_courses
+会员卡模块完整 PDS（含数据模型、业务规则、API 端点、状态流转）已迁移至独立文档 **`MEMBERSHIP.md`**，本附录不再维护细节，以主文档为准。
 
-learner_memberships（学员持有的会员卡）
-  brand_id, learner_id, product_id, remaining_credits,
-  started_at, expires_at, status(active/expired/frozen)
+**核心表概览（5张新表）：**
 
-membership_transactions（会员卡使用流水）
-  membership_id, learner_id, session_id, booking_id,
-  action(purchase/consume/refund/expire), delta, balance_after
-```
+| 表名 | 说明 |
+|---|---|
+| `membership_products` | 会员卡产品模板；含 `store_scope`（brand / store_specific）和 `course_scope`（all / course_specific）两个范围字段 |
+| `membership_product_stores` | 产品可用门店关联表（store_scope=store_specific 时生效） |
+| `membership_product_courses` | 产品可用课程关联表（course_scope=course_specific 时生效） |
+| `learner_memberships` | 学员持有的卡实例；含 remaining_credits、expires_at、status |
+| `membership_transactions` | 消费/退还/爽约扣减等全量流水 |
+
+**关键设计决策：**
+- 不在卡层级绑定教练（coach），通过 course_specific 绑定课程模板实现「教练专属课包」
+- Phase 2 起预约必须持有匹配卡，无卡不可约
+- 购卡 Phase 2 为后台手动开卡（线下收款），在线支付为 Phase 3
