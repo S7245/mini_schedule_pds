@@ -31,6 +31,7 @@
 |---|---|---|
 | v0.1 | 2026-05-25 | 基于讨论形成业务蓝图、对象架构、菜单架构和后续需求池 |
 | v0.2 | 2026-05-25 | 结合上下文复核遗漏，补充功能域详细规格、默认权限矩阵、状态流、通知事件、验收场景和非功能需求 |
+| v0.3 | 2026-05-26 | 补充平台商业化第一阶段实现边界：微信支付 Native 先行、Pending Brand/Pending Staff、手机号注册与短信验证码策略 |
 
 ### 0.2 需求完整性复核结论
 
@@ -199,7 +200,14 @@ LearnerIdentity 微信身份
 
 ### 4.3 支付
 
-第一版直接接入微信支付和支付宝。已有支付商户号。
+第一版支付模型同时保留微信支付和支付宝通道字段。平台商业化第一阶段先实现微信支付 Native 扫码支付，支付宝作为后续支付通道接入，不改变 SaaSPlanOrder、PaymentTransaction 和 BrandSubscription 的核心模型。
+
+选择微信支付 Native 先行的原因：
+
+- 平台套餐购买发生在 Web 注册/购买场景，扫码支付适配度高。
+- Native 支付不依赖小程序 openid，适合品牌负责人公开购买入口。
+- 第一阶段应优先跑通下单、验签、回调幂等、金额校验和订阅开通闭环。
+- 支付宝后续复用同一订单和支付流水模型接入。
 
 第一版需要具备支付安全底线：
 
@@ -1121,6 +1129,8 @@ SessionRecord -> 生成上课/履约记录
 - 发票
 - 合同
 - 风控审核
+- 支付宝支付通道接入
+- 已入驻品牌自助续费
 - 自动退款
 - 渠道分佣
 - 优惠码
@@ -1256,25 +1266,74 @@ remotes/origin/claude/read-background-md-3G8pb
 
 品牌自助购买入口面向品牌负责人。
 
+第一阶段公开购买入口只做功能型购买页，不做完整营销官网。
+
+页面范围：
+
+- 套餐列表：展示套餐名称、价格、额度和功能开关。
+- 注册表单：品牌名称、行业类型、联系人、手机号、短信验证码和密码。
+- 购买周期选择：月付或年付。
+- 微信支付二维码页：展示订单金额、二维码、倒计时和支付状态。
+- 支付成功页：引导进入 Brand Backoffice 或 Brand Onboarding Wizard。
+
+第一阶段不做：
+
+- 大型营销首页。
+- 客户案例。
+- SEO 内容页。
+- 复杂定价对比动画。
+- 优惠活动页。
+
 主流程：
 
 1. 品牌负责人进入注册入口。
-2. 填写负责人手机号、验证码、密码或微信授权登录信息。
+2. 填写负责人手机号、短信验证码和登录密码。第一阶段不做微信授权登录。
 3. 填写品牌名称、行业类型、联系人信息。
-4. 选择 SaaS Plan 和购买周期：月付或年付。
-5. 系统生成 SaaSPlanOrder。
-6. 用户选择微信支付或支付宝。
-7. 支付成功后，系统开通 BrandSubscription。
-8. 系统创建 Brand、品牌负责人 Staff 账号，并授予品牌负责人角色。
-9. 用户进入 Brand Onboarding Wizard。
+4. 系统创建 Pending Brand 和 Pending Staff。Pending Brand 不可运营，Pending Staff 不可登录 Brand Backoffice。
+5. 选择 SaaS Plan 和购买周期：月付或年付。
+6. 系统按 SaaS Plan 周期价格生成 SaaSPlanOrder，订单金额必须等于套餐表价格。
+7. 系统调用微信支付 Native 下单并返回二维码 code_url。
+8. 支付成功回调通过验签、幂等、金额校验和订单状态校验后，系统开通 BrandSubscription。
+9. 系统激活 Brand，激活品牌负责人 Staff，并授予品牌负责人角色。
+10. 用户进入 Brand Onboarding Wizard。
 
 异常流程：
 
-- 支付未完成：订单保持待支付，Brand 不进入正式可用状态，可回到订单继续支付。
+- 支付未完成：订单保持待支付，Pending Brand 不进入正式可用状态，可回到订单继续支付。
 - 支付失败：订单记录失败原因，允许重新发起支付。
 - 支付成功但回调延迟：前端显示支付处理中，后台通过支付查询或回调完成订阅开通。
 - 回调重复：系统按订单号和支付单号做幂等，不重复开通订阅。
 - 支付金额不一致：订单进入异常状态，不开通订阅，平台管理员人工处理。
+- 短信验证码：开发环境允许固定验证码或 Mock Provider；生产环境必须配置短信 Provider，未配置时不得允许公网真实注册。
+
+微信支付回调开通规则：
+
+- 回调验签失败：拒绝处理，不修改订单和订阅。
+- 找不到订单：记录 PaymentCallbackLog 为失败或忽略，不开通订阅。
+- 订单已 Paid：按幂等成功返回，不重复开通订阅。
+- 支付金额不一致：订单进入异常状态，不开通订阅。
+- 金额一致且订单为 PendingPayment：在同一个数据库事务内完成订单支付确认、PaymentTransaction 成功记录、BrandSubscription 创建或激活、Pending Brand 激活、Pending Staff 激活为 Brand Owner、OperationLog 写入。
+- 事务内任一步失败：整体回滚，记录 callback 错误，平台管理员可通过人工补偿入口处理。
+- 第一阶段不引入异步队列延迟开通；后续可在支付量增大后拆为可靠消息或任务队列。
+
+第一阶段订单来源：
+
+- `public_signup_first_purchase`：新品牌公开注册首购。
+- `admin_manual_compensation`：平台管理员人工补偿开通、续期或额度调整。
+
+后续版本订单来源：
+
+- `brand_self_service_renewal`：已入驻品牌自助续费。
+- `brand_self_service_upgrade`：已入驻品牌自助升级。
+- `brand_self_service_downgrade`：已入驻品牌自助降级。
+
+订阅有效期规则：
+
+- 新品牌首购从支付成功时间开始计算：月付为 `paid_at + 1 month`，年付为 `paid_at + 1 year`。
+- 平台人工续期时，如果当前订阅未过期，从当前 `expires_at` 顺延；如果当前订阅已过期，从操作时间重新开始。
+- 平台默认宽限期为 7 天，可作为系统配置调整。
+- 订阅到期后进入 `GracePeriod`，宽限期结束后进入 `Restricted`。
+- 平台冻结 `Frozen` 不自动延长订阅有效期；如需补偿延期，由平台管理员手动续期或调整有效期。
 
 ### 20.2 平台套餐管理
 
@@ -1300,6 +1359,15 @@ SaaS Plan 字段：
 - 启用/停用套餐。
 - 查看套餐关联品牌数量。
 - 停用套餐不影响已购买品牌的当前订阅，但不能新购。
+- 第一阶段不提供套餐物理删除；已被订单或订阅引用的 SaaSPlan 只能停用，不能删除。
+
+订阅快照规则：
+
+- BrandSubscription 创建时，从 SaaSPlan 和 SaaSPlanFeature 复制额度与功能开关快照。
+- SaaSPlan 调价、调额度、停用后，不影响既有 BrandSubscription。
+- 已成交订单和当前订阅展示使用 BrandSubscription 快照，不直接读取 SaaSPlan 当前值。
+- 平台管理员可对单个 BrandSubscription 手动调整额度或功能开关，必须记录 OperationLog。
+- 新购或后续续费时，才按当时 SaaSPlan 的最新价格、额度和功能开关生成新的订单与订阅快照。
 
 ### 20.3 平台订单与订阅管理
 
@@ -1332,6 +1400,22 @@ Active 正常
 - 手动调整额度。
 - 冻结/解冻品牌。
 - 处理支付异常订单。
+
+额度硬限制执行规则：
+
+- 额度限制按 BrandSubscription 快照执行。
+- Location、Staff、Learner 超过额度时，禁止新增对应资源。
+- 已有 Location、Staff、Learner 不删除、不自动停用，不影响历史课程、预约和履约记录。
+- 平台管理员可手动把额度调低到低于当前使用量；系统应标记超限并继续禁止新增对应资源。
+- 订阅进入 Restricted 后，禁止新增课程场次、员工、学员、权益和学员新预约。
+- Restricted 状态仍允许查看历史数据、取消预约、签到和爽约确认，以保证已有业务善后。
+
+订阅手动调整审计规则：
+
+- 第一阶段不单独建设 SubscriptionAdjustment 专表。
+- 平台管理员手动续期、调额度、冻结、解冻、支付异常补偿开通时，必须写入 OperationLog。
+- OperationLog 需记录操作人、动作类型、调整前值、调整后值、原因和关联订单/支付流水。
+- 不允许静默直接修改 BrandSubscription 商业关键字段。
 
 ### 20.4 品牌初始化向导
 
@@ -2003,6 +2087,53 @@ SessionRecord 第一版只记录基础履约信息，不承载复杂课程评价
 ## 29. 接口域范围
 
 本文不定义具体 API 路径，但后续接口设计应按以下接口域拆分：
+
+第一阶段平台商业化接口必须拆为 Public API 和 Platform Admin API。
+
+Public API 面向品牌负责人公开注册和支付：
+
+- SaaS Plan 公开展示。
+- Signup SMS Code。
+- Signup Order 创建。
+- Signup Order 状态查询。
+- WeChat Pay Native 下单结果返回。
+- WeChat Pay Callback / Notify。
+
+Platform Admin API 面向平台管理员运营和补偿：
+
+- SaaS Plan 管理。
+- SaaS Plan Order 查询。
+- PaymentTransaction 查询。
+- PaymentCallbackLog 查询。
+- BrandSubscription 查询。
+- BrandSubscription 手动续期。
+- BrandSubscription 额度调整。
+- BrandSubscription 冻结/解冻。
+- 支付异常订单人工补偿。
+- OperationLog 查询。
+- Platform Dashboard Summary。
+
+Platform Dashboard Summary 第一阶段只统计商业化闭环：
+
+- 品牌总数。
+- Pending Brand 数。
+- Active Brand 数。
+- 当前有效订阅数。
+- 7 天内到期订阅数。
+- Restricted / Frozen 品牌数。
+- 今日订单数。
+- 今日支付成功金额。
+- 待处理异常订单数。
+- 待处理支付回调失败数。
+
+后续再补课程运营统计：
+
+- 月成功履约人次。
+- 上座率。
+- 课程发布数。
+- Instructor 维度。
+- 学员活跃。
+- 行业分析。
 
 平台侧：
 
