@@ -1,6 +1,6 @@
 # 课程预约实现进度
 
-更新时间：2026-05-28
+更新时间：2026-05-29
 
 状态：平台商业化第一阶段进行中
 
@@ -35,14 +35,14 @@
 | 平台 summary 后端 | Done | 商业化健康指标接口 |
 | 公开注册首购订单后端 | Done | Public API 创建 pending Brand、Brand Owner 占位和 pending_payment SaaSPlanOrder |
 | Admin 前端平台页 | Done | dashboard、套餐、订阅、支付、操作日志页面 |
+| 微信支付 Native 下单 | Done | 后端四层实现（domain/app/repo/handler）+ Brand 前端支付页（二维码/倒计时/轮询） |
 | self-improving 本地学习 | Done | `/pds/.learnings` 已关联 `self-improving-agent` |
 
 ## 3. 当前缺口
 
 | 优先级 | 缺口 | 说明 |
 |---|---|---|
-| P0 | 微信支付 Native 下单 | 已有配置字段，但缺 provider adapter 和统一支付端口 |
-| P0 | 微信支付回调 | 缺验签、幂等、金额校验、事务内开通订阅 |
+| P0 | 微信支付 RSA 签名接入 | 下单 + 回调验签均为 mock，待商户号下来后接真实 RSA-SHA256 / AES-256-GCM（service.go:CreateWeChatNativePay、wechat_adapter.go:VerifyAndDecrypt） |
 | P0 | 支付异常补偿 | 需要从异常订单人工补偿开通订阅 |
 | P0 | 订阅额度硬限制 | Location、Staff、Learner 新增前需检查 BrandSubscription 快照 |
 | P1 | Brand 初始化向导 | 支付成功后引导品牌配置 Location、员工、课程、权益 |
@@ -57,9 +57,8 @@
 
 ### Now
 
-1. 微信支付 Native 下单。
-2. 微信支付回调事务闭环。
-3. 订阅额度硬限制。
+1. 订阅额度硬限制。
+2. Brand 初始化向导（Batch 4）。
 
 ### Next
 
@@ -109,38 +108,54 @@
 - Done：订单金额在后端事务中从 active SaaSPlan 的 monthly/yearly price 读取，不接收前端金额。
 - Done：重复手机号按 Brand/User 唯一约束返回明确错误。
 
-### Batch 2：微信支付 Native 下单
+### Batch 2：微信支付 Native 下单 ✅
 
-目标：
+详细契约 + Wireframe：[pds/batches/batch-02-wechat-pay.md](batches/batch-02-wechat-pay.md)
 
-- 接入已有微信支付商户配置。
-- 创建 Native 支付二维码。
-- 保存 request/response payload、prepay/code_url、过期时间。
+契约状态：**已完成**（2026-05-29 人工验收通过）
+
+完成内容：
+- 后端：`POST /api/v1/public/payment/native` + `GET /api/v1/public/payment/orders/:order_id`（四层全通，mock 模式可本地运行）
+- 前端：`/signup/payment/[order_id]` 页面，含品牌框架、步骤进度条、二维码、倒计时、状态轮询
+- api-brand 路由补充 `/api/v1/public` 组，挂载 RegisterPublicRoutes
+- 待完善：真实微信支付 RSA-SHA256 签名（生产环境需接入）
 
 验收：
 
 - 调用下单接口返回 `code_url`。
 - 订单保持 `pending_payment`。
 - 支付配置缺失时返回明确错误。
+- 前端支付页二维码可展示，倒计时和状态轮询正常运行。
 
-### Batch 3：微信支付回调开通订阅
+### Batch 3：微信支付回调开通订阅 ✅
 
-目标：
+详细契约：[pds/batches/batch-03-wechat-callback.md](batches/batch-03-wechat-callback.md)
+测试场景：[pds/batches/batch-03-wechat-callback-tests.md](batches/batch-03-wechat-callback-tests.md)
 
-- 验签。
-- 写 PaymentCallbackLog。
-- 写 PaymentTransaction。
-- 校验金额。
-- 更新 SaaSPlanOrder。
-- 创建 BrandSubscription 快照。
-- 激活 Brand。
+契约状态：**已完成**（2026-06-06 Happy Path 人工验收通过，mock 模式）
 
-验收：
+完成内容：
+- 后端：`POST /api/v1/public/payment/callback` 四层完整（domain + application + infrastructure + interfaces）
+- 新增 `internal/infrastructure/payment/wechat_adapter.go`：mock 验签 + timestamp 防重放（≤ 5 min），真实 RSA-SHA256 / AES-256-GCM 留 TODO
+- repository 单事务推进：`SELECT FOR UPDATE order` → 校验 trade_state / 金额 → 写 CallbackLog → 写 Transaction → 更新 Order → 创建 Subscription → 激活 Brand → 更新 CallbackLog 为 processed → 写 OperationLog
+- 服务层兜底：验签失败 / 事务回滚场景在事务外补写 failed CallbackLog
+- 配置：`payment.wechat.allow_mock` 默认 true，生产环境置 false 后会强制要求真实证书路径
 
-- 重复回调幂等。
-- 金额不一致进入 `exception`。
-- 验签失败不修改订单。
-- 任一步失败整体回滚。
+验收（Happy Path 已通过日志验证）：
+
+- 回调返回 `{"code":"OK","message":"success"}`
+- saas_plan_orders.status = paid，paid_at 非空，third_party_trade_no 已填
+- brand_subscriptions 新增一条 active（按 billing_cycle 推算 expires_at，额度从 plan 复制）
+- brands.status = pending → active
+- payment_transactions / payment_callback_logs / operation_logs 完整留痕
+
+待完善：
+- 真实微信 RSA-SHA256 验签和 AES-256-GCM 解密未实现（需商户证书 / 平台证书，等微信支付商户号下来后接）
+- Edge cases（E1–E19）未逐条跑过；当前以 Happy Path 通过认定本批闭环
+- `payment_callback_logs.headers` / `payload` 暂存空 `{}`，留档不完整，待审计追溯需求出现再扩
+
+本批踩坑：
+- `payment_callback_logs.headers` / `payload` 是 `JSONB NOT NULL DEFAULT '{}'`，模型用 `[]byte` 默认 nil 会写成 NULL → 违反约束。Fix：模型加 `BeforeCreate` hook 兜底为 `[]byte("{}")`
 
 ## 6. 验收命令
 
@@ -170,6 +185,24 @@ pnpm --filter @mini-schedule/admin build
 ## YYYY-MM-DD Session
 
 目标：
+
+### 契约（Batch 开始时填写，用户 approve 后方可开工）
+
+**API 接口**
+
+| 方法 | 路径 | 请求字段 | 响应字段 |
+|---|---|---|---|
+|  |  |  |  |
+
+**前端页面模块**
+
+| 页面/模块 | 类型 | 关键字段/操作 |
+|---|---|---|
+|  |  |  |
+
+契约状态：待 approve / 已 approve
+
+---
 
 完成：
 
