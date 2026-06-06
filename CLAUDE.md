@@ -38,19 +38,78 @@ Mini Schedule 当前按 **通用课程预约 SaaS** 推进，不再限定为健�
 每次实现都按这个顺序执行：
 
 ```text
-读取 PDS
--> 更新/确认 PROGRESS.md 的当前目标
--> 对照 backend/web 现状
--> 选一个小批次任务
--> 实现 backend
--> 实现 web
--> 补测试/构建验证
--> 更新 PROGRESS.md
--> 必要时写入 .learnings
--> 提交并 push
+1. 读取 PROGRESS.md + PDS，确认当前 Batch 目标
+2. 输出 Batch 契约（API 接口表 + 前端页面模块清单 + Wireframe）
+   -> 写入 pds/batches/batch-NN-slug.md
+3. 等待用户 approve 契约                          ← 必须停下等待
+4. 输出 Batch 测试场景，写入 pds/batches/batch-NN-slug-tests.md
+   -> 格式见 4.2 节
+5. 并行 spawn 两个 subagent：
+     - 后端 agent：按契约实现接口（遵守 GO_BACKEND_LANGUAGE_DESIGN.md）
+     - 前端 agent：按契约 + 模块清单 + Wireframe 实现 UI
+6. 自动跑静态验证：go build ./... + pnpm lint + pnpm build
+7. 用 browser-automation 或 senior-qa skill 执行测试场景文件
+8. 等待用户人工验收业务逻辑                        ← 必须停下等待
+9. 用户 approve → 更新 PROGRESS.md → 进入下一 Batch
+   -> 写入 .learnings（记录本轮踩坑）
+   -> 提交并 push
 ```
 
-不要跳过 `PROGRESS.md`。它是跨会话恢复上下文的主要入口。
+**两个强制停止点：** 步骤 3（契约 approve）和步骤 8（业务验收），缺一不可。不要跳过 `PROGRESS.md`，它是跨会话恢复上下文的主要入口。
+
+## 4.1 Batch 契约格式
+
+每个 Batch 开始时，Claude 创建独立契约文件 `pds/batches/batch-NN-slug.md`，并在 `PROGRESS.md` 对应 Batch 区块中添加链接引用。契约文件包含：
+
+```markdown
+#### 契约
+
+**API 接口**
+
+| 方法 | 路径 | 请求字段 | 响应字段 |
+|---|---|---|---|
+| POST | /api/v1/... | field_a, field_b | id, status |
+
+**前端页面模块**
+
+| 页面/模块 | 类型 | 关键字段/操作 |
+|---|---|---|
+| 支付页 | 页面 | 二维码、倒计时、轮询状态 |
+| 取消弹窗 | 弹窗 | 确认取消按钮 |
+
+**前端实现约束**
+
+- 复用 /web 现有组件和设计风格，不引入新 UI 库。
+- 按当前 app（admin/brand/app）的布局惯例实现，不跨端改动。
+```
+
+## 4.2 Batch 测试场景格式
+
+每个 Batch 契约 approve 后，创建测试文件 `pds/batches/batch-NN-slug-tests.md`，格式：
+
+```markdown
+# Batch NN 测试场景
+
+## Happy Path
+
+| # | 步骤 | 预期结果 |
+|---|---|---|
+| 1 | 访问 /signup，填写合法手机号 + 密码 + 品牌信息，点"下一步" | 跳转 /signup/plan |
+| 2 | 选择套餐，点"立即支付" | 跳转 /signup/payment/[order_id] |
+
+## Edge Cases
+
+| # | 场景 | 预期结果 |
+|---|---|---|
+| E1 | 密码少于 8 位 | 前端显示"密码至少 8 位" |
+| E2 | 手机号已注册 | pre-validate 返回"该手机号已注册" |
+
+## 执行方式
+
+使用 browser-automation skill 或 senior-qa skill 根据上表生成 Playwright 脚本并执行。
+```
+
+**执行时机：** 步骤 6 静态验证通过后，步骤 7 调用 skill 执行测试场景，再进入步骤 8 人工验收。
 
 ## 5. 批次大小
 
