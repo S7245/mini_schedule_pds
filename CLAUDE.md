@@ -39,23 +39,35 @@ Mini Schedule 当前按 **通用课程预约 SaaS** 推进，不再限定为健�
 
 ```text
 1. 读取 PROGRESS.md + PDS，确认当前 Batch 目标
-2. 输出 Batch 契约（API 接口表 + 前端页面模块清单 + Wireframe）
+2. **grill 设计树**：在写契约前，主线程内自我 grill，覆盖
+   - 数据模型边界（已有表 vs 新增、字段缺口、状态机）
+   - 跨域依赖（这批要做的事是否要求其他域有 API 才能闭环）
+   - 失败模式（事务回滚、幂等、并发、外部依赖错误）
+   - 验收闭环（最终怎么手动跑通业务流）
+   如果发现合并方案不可行（如 Batch 4 起初提出的合并），必须在写契约前停下问用户。
+3. 输出 Batch 契约（API 接口表 + 前端页面模块清单 + Wireframe）
    -> 写入 pds/batches/batch-NN-slug.md
-3. 等待用户 approve 契约                          ← 必须停下等待
-4. 输出 Batch 测试场景，写入 pds/batches/batch-NN-slug-tests.md
+4. 等待用户 approve 契约                          ← 必须停下等待（发邮件）
+5. 输出 Batch 测试场景，写入 pds/batches/batch-NN-slug-tests.md
    -> 格式见 4.2 节
-5. 并行 spawn 两个 subagent：
+6. 并行 spawn 两个 subagent：
      - 后端 agent：按契约实现接口（遵守 GO_BACKEND_LANGUAGE_DESIGN.md）
      - 前端 agent：按契约 + 模块清单 + Wireframe 实现 UI
-6. 自动跑静态验证：go build ./... + pnpm lint + pnpm build
-7. 用 browser-automation 或 senior-qa skill 执行测试场景文件
-8. 等待用户人工验收业务逻辑                        ← 必须停下等待
-9. 用户 approve → 更新 PROGRESS.md → 进入下一 Batch
-   -> 写入 .learnings（记录本轮踩坑）
-   -> 提交并 push
+   subagent 应在仓库内**逐 task TDD commit**，不要把整批堆成一个大 commit：
+   先红 → 实现 → 绿 → 重构 → 单 task commit，按文件 / 域为粒度划分。
+7. 自动跑静态验证：go build ./... + pnpm lint + pnpm build
+8. 用 browser-automation 或 senior-qa skill 执行测试场景文件
+9. **stage code-review**：主线程调 `/code-review` 自检本批 diff，把发现的问题
+   要么修掉、要么明确转 FEATURE_REQUESTS.md 里。
+10. 等待用户人工验收业务逻辑                       ← 必须停下等待（发邮件）
+11. 用户 approve → 更新 PROGRESS.md → 进入下一 Batch
+    -> 写入 .learnings（记录本轮踩坑）
+    -> 提交并 push
 ```
 
-**两个强制停止点：** 步骤 3（契约 approve）和步骤 8（业务验收），缺一不可。不要跳过 `PROGRESS.md`，它是跨会话恢复上下文的主要入口。
+**两个强制停止点：** 步骤 4（契约 approve）和步骤 10（业务验收），缺一不可。两点都必须通过 `/resend` 发邮件给用户（870941563@qq.com），sender 用 `mini-schedule@zkwcloud.com`。邮件内容要包含：当前 Batch 编号 + 待确认事项 / 验收指令 + 关键文件路径。
+
+不要跳过 `PROGRESS.md`，它是跨会话恢复上下文的主要入口。
 
 ## 4.1 Batch 契约格式
 
@@ -191,15 +203,29 @@ pnpm --filter @mini-schedule/admin build
 
 ## 9. 自我学习
 
-`/pds/.learnings` 已关联 `self-improving-agent`。项目级经验写入：
+`/pds/.learnings`、`/backend/.learnings`、`/web/.learnings` 三个目录均关联 `self-improving-agent`。每个 Batch 收尾必须分别触发三个仓库的总结 agent，把本批次经验写入对应文件：
 
-- `.learnings/LEARNINGS.md`
-- `.learnings/ERRORS.md`
-- `.learnings/FEATURE_REQUESTS.md`
+- `.learnings/LEARNINGS.md`：可复用经验、设计模式、约定
+- `.learnings/ERRORS.md`：本批踩坑 + 修复方式 + 可能波及的其他文件（Pending exposure）
+- `.learnings/FEATURE_REQUESTS.md`：本批暂未做但未来该做的事
 
 跨项目通用模式再考虑更新全局 skill memory。
 
-## 10. 当前优先级
+## 10. 邮件协议（/resend）
+
+每个强制停止点必须通过 Resend 发邮件给用户：
+
+- **收件人**：870941563@qq.com
+- **发件人**：mini-schedule@zkwcloud.com（zkwcloud.com 域已在 Resend 验证）
+- **触发节点**：
+  1. 步骤 4：契约 approve 等待 — Subject 用 `[Batch NN] 契约待 approve — <slug>`，正文列待确认问题 + 契约文件路径 + GitHub link
+  2. 步骤 10：业务验收等待 — Subject 用 `[Batch NN] 待业务验收 — <slug>`，正文列验收指令（curl / playwright / 手动步骤）+ 期望结果 + 关键 commit SHA
+
+不发邮件的节点：契约草稿写作中、静态验证、测试场景生成、subagent 实现、code-review 自检等"无需用户介入"的内部步骤。
+
+如果 Batch 中途发现合并不可行 / 范围决策（如 Batch 4 起步时发现需重新切分），也算停止点，发邮件并附决策选项。
+
+## 11. 当前优先级
 
 第一阶段优先完成平台商业化闭环：
 
