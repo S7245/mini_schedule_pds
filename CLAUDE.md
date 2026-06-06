@@ -215,8 +215,9 @@ pnpm --filter @mini-schedule/admin build
 
 每个强制停止点必须通过 Resend 发邮件给用户：
 
-- **收件人**：samlau7245@gmail.com（QQ 邮箱 870941563@qq.com 实测会被拦截/丢弃，不用）
-- **发件人**：mini-schedule@zkwcloud.com（zkwcloud.com 域已在 Resend 验证）
+- **收件人**：870941563@qq.com + samlau7245@gmail.com（双发，避免单点递送问题；QQ 已在 Batch 4 实测可收）
+- **发件人**：noreply@zkwcloud.com（zkwcloud.com 域已在 Resend 验证；本地址**仅发不收**，回信会被服务器退）
+- **正文头部必须含一行**：`本邮件仅作通知，请勿回信。回复请在 Claude Code 会话中进行。`
 - **触发节点**：
   1. 步骤 4：契约 approve 等待 — Subject 用 `[Batch NN] 契约待 approve — <slug>`，正文列待确认问题 + 契约文件路径 + GitHub link
   2. 步骤 10：业务验收等待 — Subject 用 `[Batch NN] 待业务验收 — <slug>`，正文列验收指令（curl / playwright / 手动步骤）+ 期望结果 + 关键 commit SHA
