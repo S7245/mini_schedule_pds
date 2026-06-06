@@ -208,6 +208,28 @@ Post-impl code-review：7 finder 并行（行扫描 / 删除行为 / 跨文件�
 - E24/E25 quota 并发竞争测试需本地 pg 真测，sandbox 无法 testcontainer
 - mini_program_qrcode 步骤无实际后端，只能跳过；后续小程序集成 batch 落地后再做
 
+### Batch 4.5：Migration auto-apply on boot ✅
+
+详细契约：[pds/batches/batch-04.5-migration-autoboot.md](batches/batch-04.5-migration-autoboot.md)
+
+契约状态：**已完成**（2026-06-06 人工验收通过）
+
+完成内容（backend dev 4 个 task commit `13bdcd2..696d02d`）：
+- `migrations/embed.go`：`//go:embed *.sql` 把 migration 文件打进二进制
+- `internal/infrastructure/database/migrate.go`：基于 `golang-migrate/v4` + `source/iofs` 的 `RunMigrationsUp`，dirty 状态拒启动
+- `config.Database.AutoMigrateOnBoot` 配置项 + env 绑定 + 4 个 dev yaml 默认 true
+- 三个 `cmd/api-*/main.go` 在 Wire 之前调 `RunMigrationsUp`，失败 `log.Fatal`
+- Makefile `DATABASE_URL` 兜底用 `${PG_USER:-${USER}}`，不再硬编码 `postgres:postgres`
+
+验收（本地手测全过）：
+- v3 → v4：日志 `migrations: applied from_version=3 to_version=4`
+- 已最新：日志 `migrations: schema up to date version=4`
+- dirty=true：boot 报错并拒启动
+- 默认 OS user 的 `make migrate-up` 直接可跑
+
+本批踩坑：
+- `//go:embed *.sql` 在 `migrations` 包内时，文件挂在 embed.FS 的**根**，`iofs.New(fs, "migrations")` 报 `open migrations: file does not exist`。正确写法 `iofs.New(fs, ".")`。
+
 ## 6. 验收命令
 
 后端：
