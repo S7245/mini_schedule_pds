@@ -22,6 +22,33 @@
    - `verified-done`：所有 Happy + 关键 Edge case 实跑通过，可作为下游依赖。
    PROGRESS.md 同时显示两个里程碑日期。
 
+## 2026-06-06 契约文件 lifecycle 字段未结构化（Batch 4 仍只在头部一行状态）
+
+**现象**：LEARNINGS §5 已建议契约文件头部用统一 lifecycle 枚举 `draft → approved → implementing → static-verified → scenario-verified → done / parked`，每次变更补 changelog。但 Batch 4 实际仍延续旧格式——仅在头部一行写 `状态：已 approve ✅` + `approve 时间：2026-06-06`，无 changelog 块，状态机切换不可追溯。
+
+**风险**：
+
+1. 跨会话恢复时无法看出该批"目前卡在哪一步"——是 approve 完待写 tests？还是 tests 完待 spawn？还是已实现待验收？需要回溯多轮对话。
+2. 多 Batch 并行时（如 batch-04 实现中 + batch-05 草稿中）无法用 grep 统一过滤当前活跃批。
+
+**建议**：
+
+1. CLAUDE.md §4.1 契约模板头部固定字段块：
+   ```markdown
+   ## Lifecycle
+
+   | 阶段 | 时间戳 | 触发人 |
+   |---|---|---|
+   | draft | 2026-06-06 14:00 | claude |
+   | approved | 2026-06-06 15:30 | user |
+   | implementing | 2026-06-06 15:35 | claude |
+   | static-verified | — | — |
+   | scenario-verified | — | — |
+   | done | — | — |
+   ```
+2. 每次状态变更必须同步回填表格，PROGRESS.md 只引用当前阶段，不复述。
+3. 兼容已 done 的旧批：补一次 backfill PR 把 batch-01/02/03/04 lifecycle 表补全（一次性，非每批重做）。
+
 ## 2026-06-06 契约 approve 流程缺少"问题降级"机制
 
 **现象**：batch-03 契约第 386-394 行 "用户需确认 5 问"包含了一个跨 Batch 调度问题（"异常订单补偿何时启动（下一批次）"），用户实际 approve 时只能整体 yes/no，没法说"前 4 个我答了，第 5 个推迟到下个 Batch"。
