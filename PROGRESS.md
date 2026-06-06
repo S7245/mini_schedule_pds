@@ -44,8 +44,8 @@
 |---|---|---|
 | P0 | 微信支付 RSA 签名接入 | 下单 + 回调验签均为 mock，待商户号下来后接真实 RSA-SHA256 / AES-256-GCM（service.go:CreateWeChatNativePay、wechat_adapter.go:VerifyAndDecrypt） |
 | P0 | 支付异常补偿 | 需要从异常订单人工补偿开通订阅 |
-| P0 | 订阅额度硬限制 | Location、Staff、Learner 新增前需检查 BrandSubscription 快照 |
-| P1 | Brand 初始化向导 | 支付成功后引导品牌配置 Location、员工、课程、权益 |
+| P0 | Staff / Learner 额度硬限制 | Batch 4 完成 Location 端 quota；Staff / Learner POST 接口落地时一并接 SubscriptionGuard |
+| P1 | Brand 初始化向导后续步骤 | Batch 4 完成骨架 + 第 1-2 步；3-8 步（员工/教练/课程分类/课程模板/权益/场次/小程序二维码）随后续 batch 逐步落地 |
 | P1 | Brand 角色权限 | Staff、InstructorProfile、菜单权限、数据权限、操作权限 |
 | P1 | 课程和场次 | CourseTemplate、ClassSession、资源占用 |
 | P1 | 学员权益 | Entitlement Product、Learner Entitlement、Hold、Consume、Adjust |
@@ -57,15 +57,15 @@
 
 ### Now
 
-1. 订阅额度硬限制。
-2. Brand 初始化向导（Batch 4）。
+1. Staff / InstructorProfile CRUD + 同款 SubscriptionGuard quota（向导第 3 步实做）。
+2. Brand 权限模型第一版（菜单 / 数据 / 操作权限）。
 
 ### Next
 
-1. Brand 初始化向导。
-2. Location / Staff / InstructorProfile。
-3. Brand 权限模型第一版。
-4. 课程模板和课程场次。
+1. 课程分类 / 课程模板 / 课程场次（向导第 4-7 步）。
+2. 小程序二维码生成（向导第 8 步）。
+3. 学员权益模板和发放。
+4. 学员预约（小程序端）。
 
 ### Later
 
@@ -156,6 +156,57 @@
 
 本批踩坑：
 - `payment_callback_logs.headers` / `payload` 是 `JSONB NOT NULL DEFAULT '{}'`，模型用 `[]byte` 默认 nil 会写成 NULL → 违反约束。Fix：模型加 `BeforeCreate` hook 兜底为 `[]byte("{}")`
+
+### Batch 4：品牌初始化向导骨架 + Location 闭环 ✅
+
+详细契约：[pds/batches/batch-04-onboarding-location.md](batches/batch-04-onboarding-location.md)
+测试场景：[pds/batches/batch-04-onboarding-location-tests.md](batches/batch-04-onboarding-location-tests.md)
+
+契约状态：**已完成**（2026-06-06 Happy Path 人工验收通过）
+
+完成内容：
+- 后端 9 commits（`cab353d..3b7d710` on `dev`）：
+  - migration 000004：`brands.description VARCHAR(2000)`
+  - 新 domain `onboarding` + `location`；8 个 step_key（brand_profile / location / staff / course_category / course_template / entitlement_template / class_session / mini_program_qrcode）
+  - onboarding 应用层：`GET /api/v1/brand/onboarding/status`（7 表实时 COUNT 聚合）、`PATCH /onboarding/steps/:key/skip`、`POST /onboarding/complete`（单事务原子化）
+  - brand profile：`GET / PATCH /api/v1/brand/profile`，白名单字段
+  - Location 完整 CRUD（GET 列表 / GET 详情 / POST / PATCH / PATCH /status / DELETE 软删），含：
+    - SubscriptionGuard：单事务 SELECT FOR UPDATE subscription（status='active' AND grace_ends_at/expires_at > now）+ COUNT + INSERT，避免并发 race + 过期套餐绕过
+    - OperationLog：location_created / location_status_changed / location_deleted 三个生命周期事件
+  - 错误码新增 10 个：BRAND_NOT_ACTIVE / STEP_NOT_SKIPPABLE / INVALID_STEP_KEY / ONBOARDING_NOT_READY / LOCATION_NAME_DUPLICATED / LOCATION_NOT_FOUND / QUOTA_EXCEEDED / SUBSCRIPTION_RESTRICTED / BRAND_CODE_DUPLICATED / INVALID_PARAM
+  - AppError 扩 `Details map[string]any`，response.Error 统一序列化进 Response.Data
+  - JSONB BeforeCreate 清债：补 PaymentTransactionModel / SaaSPlanOrderModel / OperationLogModel / BrandOnboardingStepModel 兜底 hook
+  - Wire 重生：之前手改 `wire_gen.go` 全部 `go generate` 干净
+- 前端 8 commits（`5bf6c6d..3d46fbb` on `dev`）：
+  - 路由分组 `(protected)/onboarding/`：layout 守卫 + 8 个子路由（brand-profile / locations / 动态 [stepKey] / complete）
+  - WizardShell 进度组件 + StepPlaceholder 占位（第 3-8 步 + 跳过按钮）
+  - LocationFormDialog（RHF + Zod）+ LocationStatusToggle（按 Q3 决定用既有"按钮 + ConfirmDialog"模式而不是 shadcn switch）
+  - 工作台首页进度条卡片（onboarding 未完成时显示，已完成自动隐藏）
+  - 支付页 paid → /login?next=/onboarding
+
+Post-impl code-review：7 finder 并行（行扫描 / 删除行为 / 跨文件追踪 / 复用 / 简化 / 效率 / 高度），dedupe 26→10 finding：
+- 7 项 P0/P1/P2 correctness 本批修完（commits `4b0dcd7` / `ad11205` / `6dee9c9`）：
+  - A1 Complete 非原子 → CompleteOnboarding 单事务
+  - B2 quota 忽略 expires_at → 加 grace_ends_at/expires_at 校验
+  - C1 completed step 不持久化 → EnsureStepCompleted upsert
+  - C2 7 张 COUNT status 过滤不一致 → 全部加 active / status 过滤
+  - A5 UpsertSkippedStep 不清 completed_at → ON CONFLICT 加 nil 重置
+  - A2 QUOTA_EXCEEDED gin.H envelope bypass → 统一走 response.Error + AppError.Details
+  - A3 skipStep 静默吞 bind 错 → 加 ContentLength check + 返 400
+- 9 项 architectural / cleanup 转 `backend/.learnings/FEATURE_REQUESTS.md` "Batch 4 code-review 转移项"，下批起飞前清。
+
+验收（业务流通过）：
+- 登录 brand → 自动跳 onboarding → 填资料 → 创 Location → 跳过第 3-8 步 → complete → 跳工作台
+- PATCH /brand/profile 真实落库（含 description）
+- step 状态实时反映；progress 8/8 后 brand.onboarding_status = completed
+
+本批踩坑：
+- migration 000004 需在本地 DB 手动跑（`Makefile` 假设用户是 `postgres`，但开发机实际是 `liushan` → `make migrate-up` 静默失败）。Fix：直接 `psql -d mini_schedule -c "ALTER TABLE brands ADD COLUMN IF NOT EXISTS description VARCHAR(2000);" + UPDATE schema_migrations`。建议 `.learnings` 记录"自动 migration on server boot" 选项。
+
+待完善：
+- Edge cases（E1-E22）未自动化 Playwright，仅 Happy Path 通过
+- E24/E25 quota 并发竞争测试需本地 pg 真测，sandbox 无法 testcontainer
+- mini_program_qrcode 步骤无实际后端，只能跳过；后续小程序集成 batch 落地后再做
 
 ## 6. 验收命令
 
