@@ -1,6 +1,7 @@
 # Batch 04.5 — Migration auto-apply on boot
 
-状态：**契约草稿** ⏳（待用户 approve）
+状态：**已 approve** ✅ — 进入实现阶段
+approve 时间：2026-06-06
 更新时间：2026-06-06
 范围：技术债清理，无新业务接口、无前端改动。
 
