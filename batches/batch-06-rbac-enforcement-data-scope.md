@@ -1,7 +1,8 @@
 # Batch 06 — RBAC enforcement + data_scope 落地 + 角色 read API
 
-状态：**契约草稿** ⏳（待用户 approve）
-契约 lifecycle：draft → **awaiting approval** → approved → plan → tdd → reviewed → done
+状态：**已 approve** ✅ — 进入 plan 阶段
+approve 时间：2026-06-06
+契约 lifecycle：draft → approved → **plan-in-progress** → tdd → reviewed → done
 更新时间：2026-06-06
 
 ---
