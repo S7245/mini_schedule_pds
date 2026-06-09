@@ -94,3 +94,47 @@ Batch 4（向导骨架 + Location 闭环）首次跑完整 grill → 5 问 appro
   3. 转 FR 的每条带"为何不本批修"一句话理由
 - 该模板让 code-review 产出可控、不阻塞本批 approve，同时长期改进项不丢。后续每个 Batch 步骤 9 都按这个二分法走。
 
+## 2026-06-06 Batch 5 process refinements
+
+Batch 5（Staff CRUD + InstructorProfile + 角色 seed + SubscriptionGuard 重构）是首批严格走 `grill → spec → plan → TDD → /code-review` 全流程的批次。沉淀如下：
+
+### 1. plan 文件作为外部状态机，使 subagent 中途崩溃可"无缝续跑"
+
+- Batch 5 实操中后端 subagent 在 T07 附近因 API 403 中断；续跑的 agent 仅凭 `batch-05-staff-instructor-roles-plan.md` + 已 push 的 commits + commit message 里的 task 编号（`feat(batch-5-be): ...`）就接力成功，未回灌任何对话上下文。
+- 让"plan 文件 = 外部状态"成立的三要素：
+  1. plan 文件里画 DAG（13 task 依赖图）+ 每个 task 的红绿步骤是可机读的执行手册，不是 narrative 描述。
+  2. commit message 模板 `feat(batch-N-{be|fe}): T0X — ...` 把 task 编号反向写回 git log，续跑 agent 可用 `git log --grep=batch-5-be` 直接定位"完成到哪个 task"。
+  3. 风险/预案章节预先标注了 audit pkg 循环依赖、Wire 失败等"已知 hairy 点"的 fallback，避免续跑 agent 自己摸坑。
+- 规则升级：CLAUDE.md §4 步骤 6 之前增设 4.5 步骤"plan 文件"，把这三件事固化进 §4.3 plan 模板（待 FR 落地）。
+
+### 2. grill 决定点从 5 → 10，细到"是否本批顺手清债"颗粒
+
+- Batch 3 / 4 的 grill 各产 5 个根决定点；Batch 5 grill 产 10 个：范围档位、SubscriptionGuard 是否顺手抽、permission seed 范围、/staff vs 扩 /users、owner backfill 双轨、owner 删除策略、data_scope 落地范围、菜单可见性、InstructorProfile 摆放、soft-delete 实现。
+- 关键增量在"是否顺手清 Batch 4 转出去的 FR"这一类问题（决定 2 / 5 / 8）—— 把 FR 队列与当前批的"附加范围"挂钩，避免 FR 越积越多但永远没合适窗口落地。
+- 但 10 个决定点已接近用户阅读疲劳上限；Batch 5 用户实测都能逐条回，但 grill 末尾 2 条（决定 9 / 10）回答明显仓促。**甜区估计在 6–8 个决定点**，再多需要拆"必答 / 备选"两组。
+- 规则：grill 决定点 ≤ 8 个；超出时强制按"本批闭环必须 / 可推迟到下批"二分，后者归入 PROGRESS.md Next bucket 而非塞回契约提问。
+
+### 3. 契约 / plan 阶段缺"前端 ↔ 后端类型对齐 checklist"，导致验收期 bug 集中在序列化边界
+
+- Batch 5 验收期出现的 3 个 bug 全是前后端类型不一致：
+  - omitempty 让"显式 null"和"字段缺失"在前端 zod 校验里行为不同；
+  - 后端某字段返 `string` 但前端 type 写 `string[]`（specialties / certificates）；
+  - owner 详情页 editor 在 `is_owner=true` 时未禁用某些操作（前端缺前置态描述）。
+- 三处都是契约 API 表里"响应字段"列只写了名字、没写"JSON shape + nullable + 空数组 vs null 语义"。spec 阶段需补一节强约束：
+  - 每个响应字段写 `name: type | nullable=true/false | omitempty=true/false | 空集合形态=[]/null`。
+  - plan 阶段在 F01（前端 types task）和 T05（后端 domain types task）之间显式建一个"类型对齐表"，两端任一边 drift 必须更新 plan 而非各自实现。
+- 规则升级（也写进 FR）：契约模板加 §"序列化契约"小节，列字段级 nullable / omitempty / 空集合形态。
+
+### 4. review 阶段：finder 角度从 7 → 3 聚焦的取舍
+
+- Batch 4 的 7 个 finder（bug / security / perf / style / test-gap / docs / arch）产 26 候选，dedupe 后 10 项；其中 perf / style / docs 三类 finder 各只贡献 0-1 个独立候选，重复成本高。
+- Batch 5 改成 3 个聚焦角度：backend correctness、frontend correctness、架构回归（SubscriptionGuard 抽出 + audit pkg 抽出对 Batch 4 行为的影响）。产 20 候选 dedupe 后 17 项，单 finder 信噪比明显高于 Batch 4。
+- 但代价：security / test-gap 角度未独立 finder，本批是靠 backend correctness finder 顺带捞 —— 验收期 3 个 bug 中 string vs []string 一项严格说属于 test-gap（前端 zod 没 negative test），3-finder 配置漏掉了。
+- 折中规则：默认 3 finder（backend / frontend / 架构回归），**当本批含跨域重构时**追加 1 个 test-gap finder（聚焦"被改的旧 API 的回归测试是否够"），形成 3+1 灵活档。
+
+### 5. 验收期 bug 3 个 / 全在序列化边界 → 信号：spec 阶段缺契约级类型对齐，不是实现质量问题
+
+- Batch 5 验收期 bug 比 Batch 4（验收期 1 个 bug）多，但**全部聚集在前后端序列化对齐**，说明不是 subagent 实现退化，而是 spec 没要求把类型形状写到字段级。
+- 这一信号支持 §3 的规则升级：把"序列化契约"列进契约模板，spec approve 前就要求填完，本批以后强制。
+- 同时启示 review 配置（§4 的 3+1 archetype）：跨端重构批必须含独立的 test-gap finder，专门盯前端 zod / type 与后端 JSON 的 negative case。
+

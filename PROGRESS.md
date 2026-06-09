@@ -44,9 +44,10 @@
 |---|---|---|
 | P0 | 微信支付 RSA 签名接入 | 下单 + 回调验签均为 mock，待商户号下来后接真实 RSA-SHA256 / AES-256-GCM（service.go:CreateWeChatNativePay、wechat_adapter.go:VerifyAndDecrypt） |
 | P0 | 支付异常补偿 | 需要从异常订单人工补偿开通订阅 |
-| P0 | Staff / Learner 额度硬限制 | Batch 4 完成 Location 端 quota；Staff / Learner POST 接口落地时一并接 SubscriptionGuard |
-| P1 | Brand 初始化向导后续步骤 | Batch 4 完成骨架 + 第 1-2 步；3-8 步（员工/教练/课程分类/课程模板/权益/场次/小程序二维码）随后续 batch 逐步落地 |
-| P1 | Brand 角色权限 | Staff、InstructorProfile、菜单权限、数据权限、操作权限 |
+| P0 | Learner 额度硬限制 | Batch 4 Location / Batch 5 Staff 已接 SubscriptionGuard；Learner POST 接口落地时一并接（参数化 ResourceKind） |
+| P1 | Brand 初始化向导后续步骤 | Batch 4-5 完成第 1-3 步；第 4-8 步（课程分类/课程模板/权益/场次/小程序二维码）随后续 batch 逐步落地 |
+| P1 | RBAC enforcement + 数据权限 | Batch 5 完成 role/permission seed + 角色分配 API；middleware 拦截 + data_scope（role_default/assigned_locations/own_*）实际生效留 Batch 6 |
+| P1 | 品牌自定义角色 | Batch 5 完成 8 个预置 role_templates；品牌后台自建角色 / 调整权限 CRUD 留 Batch 6 |
 | P1 | 课程和场次 | CourseTemplate、ClassSession、资源占用 |
 | P1 | 学员权益 | Entitlement Product、Learner Entitlement、Hold、Consume、Adjust |
 | P1 | 学员预约 | 微信小程序品牌空间、课程表、预约、取消 |
@@ -57,13 +58,14 @@
 
 ### Now
 
-1. Staff / InstructorProfile CRUD + 同款 SubscriptionGuard quota（向导第 3 步实做）。
-2. Brand 权限模型第一版（菜单 / 数据 / 操作权限）。
+1. RBAC middleware + data_scope 落地（Batch 6 候选）。
+2. 课程分类 / 课程模板 / 课程场次（向导第 4-7 步）。
 
 ### Next
 
-1. 课程分类 / 课程模板 / 课程场次（向导第 4-7 步）。
-2. 小程序二维码生成（向导第 8 步）。
+1. 学员权益和权益模板。
+2. 学员预约（小程序端）。
+3. 小程序二维码生成（向导第 8 步）。
 3. 学员权益模板和发放。
 4. 学员预约（小程序端）。
 
@@ -229,6 +231,60 @@ Post-impl code-review：7 finder 并行（行扫描 / 删除行为 / 跨文件�
 
 本批踩坑：
 - `//go:embed *.sql` 在 `migrations` 包内时，文件挂在 embed.FS 的**根**，`iofs.New(fs, "migrations")` 报 `open migrations: file does not exist`。正确写法 `iofs.New(fs, ".")`。
+
+### Batch 5：Staff + InstructorProfile + 角色 seed + SubscriptionGuard 重构 ✅
+
+详细契约：[pds/batches/batch-05-staff-instructor-roles.md](batches/batch-05-staff-instructor-roles.md)
+测试场景：[pds/batches/batch-05-staff-instructor-roles-tests.md](batches/batch-05-staff-instructor-roles-tests.md)
+Plan 文件：[pds/batches/batch-05-staff-instructor-roles-plan.md](batches/batch-05-staff-instructor-roles-plan.md)
+
+契约状态：**已完成**（2026-06-06 业务验收通过）
+
+完成内容：
+- 后端 15 commits（`6921def..97a33bb` on `dev`）：
+  - migration 000005：13 个 permission code（brand/location/staff/instructor 4 域）+ 8 个预置 role_templates + role_template_permissions 映射 + brand_users.is_owner 列
+  - `internal/audit/` pkg：统一 OperationLog 写入入口，actor_type 枚举（brand_user/platform_admin/system），用 `tx.Table().Create(map)` 避免循环依赖（清债 Batch 4 FR）
+  - `internal/application/commercial/subscription_guard.go`：抽出参数化 ResourceKind（Location/Staff/Learner）的 quota guard；Location 改造复用（清债 Batch 4 FR）
+  - Staff 四层：domain/staff + role + instructor / application/staff（含 service.go + role_allocator.go）/ infrastructure/persistence/{staff,role,instructor}_repository.go + models / interfaces/brand/staff_handler.go（11 endpoints）
+  - role_allocator：`EnsureBrandRolesSeeded` 从 role_templates 复制 8 个 brand_roles + `AssignDefaultOwnerRoles` ON CONFLICT DO NOTHING 幂等
+  - 注册流程改造：`commercial.Service.CreatePublicSignupOrder` 创建 owner 时同步分配品牌负责人角色
+  - admin backfill 接口 `POST /api/v1/admin/system/backfill-owner-roles`（一次性给现存 brand owner 补角色）
+  - 错误码扩 7 个：STAFF_PHONE_DUPLICATED / STAFF_NOT_FOUND / OWNER_PROTECTED / ROLE_NOT_FOUND / LOCATION_ASSIGNMENT_INVALID / INSTRUCTOR_PROFILE_NOT_FOUND / INSTRUCTOR_PROFILE_CONFLICT
+  - Wire 三个 wire_gen.go 干净重生
+- 前端 9 commits（`a05b76a..a3af71a` on `dev`）：
+  - F01 types + 4 个 api client + 错误码常量
+  - `/staff` 列表（DataTable + 搜索 + 状态过滤）
+  - `/staff/[id]` 详情页（基础信息 + 角色任职 + Location 任职 + Instructor 折叠卡）
+  - StaffCreateDialog（RHF + Zod，role 多选 chip + location 多行 + QUOTA_EXCEEDED toast+inline 双展示）
+  - StaffRoleAssignmentEditor + StaffLocationAssignmentEditor（PUT 全量替换；scope-aware；is_primary 单选；owner 隐藏编辑入口）
+  - InstructorProfileSection 折叠卡（csv 文本框；启用/编辑/注销）
+  - onboarding 第 3 步真实化 + 工作台菜单加"员工管理"（不加角色管理）
+  - 验收期 bug 修：详情页 `staff.{role,location}_assignments ?? []` 兜底
+
+Post-impl code-review：3 finder 并行（backend correctness / frontend correctness / 架构回归），20 个候选 dedupe → 6 项当批合（commits `9cd2807` + `36bd170`）：
+- B2 staffRepository.Update 加 audit.Write
+- B3 RoleAssignmentEditor 对 owner 隐藏编辑入口 + OWNER_PROTECTED 错误处理
+- B4 service.ReplaceRoleAssignments 对 owner 拒绝（阻断 brand_admin 静默清空 owner 的 brand_owner 角色这一权限提升漏洞）
+- B5 ReplaceRoleAssignments / ReplaceLocationAssignments 加 SELECT FOR UPDATE on brand_user 行
+- B8 instructor unique violation 改用 INSTRUCTOR_PROFILE_CONFLICT
+- B11 StaffCreateDialog 在非 quota 错误分支清掉 quota counter
+
+11 项 architectural / cleanup 转 `backend/.learnings/FEATURE_REQUESTS.md` "Batch 5 code-review 转移项"。
+
+验收（业务流通过）：
+- 登录 owner → 员工管理列表显示 owner 角色"品牌负责人" → 详情页角色任职**无编辑按钮**（review B3）
+- 新增员工：phone/name/password + 角色"店长" + Location1 manager primary → 列表新增 + 详情页"晋升为教练" → 填资料保存 → 列表显示教练标识
+- 进 /onboarding → 第 3 步 staff 显示 completed
+- backfill 接口幂等：第一次 `processed:1`，第二次 `skipped:1`
+
+本批踩坑：
+- `Staff.RoleAssignments` / `LocationAssignments` 用 `json:",omitempty"`，owner 等无任职场景下整个字段从 JSON 丢失，前端 `.map()` 炸 → 前端类型说 `string[]` 但运行时 undefined。修：后端去 omitempty + toStaffDomain 把 nil 规整为空切片；前端两个 editor 加 `?? []` 兜底。规则：**任何前端会迭代的数组字段都不要 omitempty**
+- handler binding `Specialties / Certificates string` vs 前端发 `string[]` → Gin ShouldBindJSON 类型不匹配返通用 INVALID_REQUEST，看不出根因。修：handler 接 `[]string` + joinCSV→DB string；GET 用 embedding struct splitCSV→[]string
+
+待完善：
+- 11 项 review 转 FR（含 service.Create 原子性、OwnerRoleAllocator ctx 参数、providePublicHandler 真重构、ResourceStatusToggle 泛型抽出等），下批起飞前清
+- E2E Playwright 未自动跑（前端 agent 加了 data-testid 钩子）
+- E10 并发 staff quota race 需本地 pg 真测
 
 ## 6. 验收命令
 
