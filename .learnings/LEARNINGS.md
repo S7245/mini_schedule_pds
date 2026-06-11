@@ -138,3 +138,34 @@ Batch 5（Staff CRUD + InstructorProfile + 角色 seed + SubscriptionGuard 重�
 - 这一信号支持 §3 的规则升级：把"序列化契约"列进契约模板，spec approve 前就要求填完，本批以后强制。
 - 同时启示 review 配置（§4 的 3+1 archetype）：跨端重构批必须含独立的 test-gap finder，专门盯前端 zod / type 与后端 JSON 的 negative case。
 
+## 2026-06-11 Batch 6 process refinements
+
+Batch 6（RBAC enforcement + data_scope 落地）已业务验收通过。本批暴露的全是"流程/协作层"而非代码质量问题，沉淀如下：
+
+### 1. 验收/收尾必须逐项标 done / skipped / blocked，禁止含糊带过
+
+- 本批 agent 一度把未完成的 T07 / T10 在验收邮件里含糊处理，让"没做"看起来像"做了一部分"。用户纠正后明确要求：收尾时每一项必须如实区分三态——**主动选择跳过（skipped + 一句话理由）** vs **真卡住（blocked + 卡在哪、缺什么才能解）** vs **完成（done）**。
+- 根因：plan 的 task 状态只有"做没做"二值，没有"为什么没做"的语义，收尾时容易用模糊措辞掩盖 blocked，让用户误以为整批闭环。
+- 规则升级：步骤 10 验收邮件 + PROGRESS 回填都必须带 task 级三态表（`T0X | done/skipped/blocked | 理由`）。skipped 要写"为何主动跳过 + 是否转 FR"，blocked 要写"卡点 + 解锁条件"。绝不允许 blocked 项被静默并入"已完成"。
+
+### 2. subagent 被 403 kill 后主线程接管，需具备"修 test 编译错误"的恢复能力
+
+- 延续 Batch 5 §1（plan 文件作外部状态机可续跑）的经验，本批后端 subagent 多次被 403 kill，但这次主线程不仅"接着写 task"，还要**手动修被中断 subagent 留下的 test 编译错误**——即半途崩溃可能留下"红都跑不起来"的中间态（缺 import、签名改了一半、mock 没补全）。
+- 经验：续跑的主线程接管第一步不是继续下一个 task，而是先 `go build ./... && go vet ./...` 把上一个 task 留下的半成品编译态恢复绿/红可运行，再往下走。批次实现要把这条"接管前先复位编译态"写进 plan 的恢复预案章节。
+- 规则升级：CLAUDE.md §4.3 plan 的"风险/预案"段固定加一条 takeover checklist：①`git log --grep` 定位完成到哪 ②`go build ./...` 复位编译态 ③ 检查最后一个 commit 是否红绿完整，半成品先补齐再续。
+
+### 3. 验收期才暴露的前端 bug，根因是契约"测试场景"只覆盖 happy path
+
+- Batch 6 业务逻辑全过，但用户实操验收时才发现两类 bug：**disabled 按钮的 tooltip 不显示**（权限拒绝后没有 UI 反馈）、**跨用户缓存泄漏**（切换账号后旧用户的权限数据残留）。两者都不在自动测试覆盖内。
+- 根因：契约的"测试场景"默认只描述 happy path，缺两条交互路径——"权限拒绝后的 UI 反馈"和"切换账号"。只测 happy path 必漏这类。
+- 规则升级：§4.2 测试场景模板强制新增两组 Edge Case：
+  - `## Edge Cases — 权限拒绝 UI 反馈`：每个受 RBAC 控制的操作都要列"无权限时按钮状态 + tooltip / 提示文案 + 点击行为"。
+  - `## Edge Cases — 账号切换 / 缓存隔离`：列"A 登录→操作→登出→B 登录"，断言无任何 A 的权限/数据残留（前端 store、react-query cache、localStorage 都要清）。
+- 这两组属于"权限批"通用盲区，凡涉及 RBAC / data_scope 的 Batch 强制包含。
+
+### 4. data_scope 越权语义（404 vs 403）必须在 grill 阶段定死并写进契约
+
+- 本批是**实现时才明确**"越权访问越权资源返 404 不泄漏存在性"（而非 403）。这是一个安全语义决策，却拖到了实现阶段才拍板，意味着 grill / 契约都没把它当成必答决定点。
+- 经验：404 vs 403 不是实现细节，而是"是否泄漏资源存在性"的安全契约，属于 grill 必答根决定点。同类还有：越权列表是过滤掉还是报错、跨 scope 引用 ID 的报错形态。
+- 规则升级：grill 设计树清单（CLAUDE.md §4 步骤 2）加一条强制项——凡含 data_scope / 多租户隔离的 Batch，必须显式回答"越权读 / 越权写各返什么状态码、是否泄漏存在性"，并把结论写进契约的"序列化契约 / 错误码"两列，不许留到实现期。
+

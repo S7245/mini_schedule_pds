@@ -286,6 +286,40 @@ Post-impl code-review：3 finder 并行（backend correctness / frontend correct
 - E2E Playwright 未自动跑（前端 agent 加了 data-testid 钩子）
 - E10 并发 staff quota race 需本地 pg 真测
 
+### Batch 6：RBAC enforcement + data_scope 落地 ✅
+
+详细契约：[pds/batches/batch-06-rbac-enforcement-data-scope.md](batches/batch-06-rbac-enforcement-data-scope.md)
+测试场景：[pds/batches/batch-06-rbac-enforcement-data-scope-tests.md](batches/batch-06-rbac-enforcement-data-scope-tests.md)
+Plan 文件：[pds/batches/batch-06-rbac-enforcement-data-scope-plan.md](batches/batch-06-rbac-enforcement-data-scope-plan.md)
+
+契约状态：**已完成**（2026-06-11 业务验收通过）
+
+完成内容：
+- 后端 10 commits（`2bdc02f..113317f` on `dev`）：
+  - domain/rbac：`PermissionSet`（Has/HasAll/Codes/Expand，edit/create→view、delete→view+edit 隐含，内存推导不落库）+ `DataScope`（Kind + LocationIDs，MergeScopes union，all_brand 胜）
+  - infrastructure/persistence/rbac_repository：`LoadEffectiveRaw` 单条 SQL JOIN 三表（brand_role_permissions / brand_user_role_assignments / brand_roles）+ data_scope 推导（role_default → all_brand / assigned_locations）
+  - application/rbac/checker：`Resolve`（ctx-cache → Redis L1 60s TTL → DB）+ `Require` + owner fast-path；`ScopeResolver.ApplyToQuery`（DataScope → GORM where）
+  - service 层校验（非 middleware）：staff/location/onboarding/brandprofile 每个 service 方法前置 `require(code)`；checker==nil 时 bypass（兼容 bootstrap）
+  - T07 data_scope 收紧：staff/location 的 list+detail+write 路径按 assigned_locations 过滤；列表 EXISTS/IN 子查询，详情/写路径 out-of-scope 返 404（不泄漏存在性）
+  - GET /me/permissions 独立 endpoint：序列化 `permissions[]` + `data_scope {kind, location_ids?}`
+  - 错误码扩 1 个：PERMISSION_DENIED（HTTP 403）
+- 前端 4 + 2 commits（`b05b4f1..8c4efef` + 验收期 2 修 on `dev`）：
+  - F01 `usePermissions` hook + Context Provider + PERMISSIONS 常量；fail-closed（load 失败/loading → has() 全 false → 按钮默认 disabled）
+  - F02 菜单按权限隐藏（`/staff` 需 staff.view；未列入的旧菜单默认可见）
+  - F03 操作按钮按权限 disabled + tooltip
+  - F04 全局 PERMISSION_DENIED toast handler
+  - 验收期修 1（`e71781d`）：disabled 元素不派发指针事件 + shadcn `disabled:pointer-events-none` → 原生 title tooltip 永不弹。新增 `Hint`（Radix tooltip 包裹器，触发器挂非 disabled span + `[&_:disabled]:pointer-events-none`），替换 5 处失效 title=
+  - 验收期修 2（`69f513c`）：登出再登录后权限菜单仍停留在上一用户（见下"本批踩坑"）
+
+本批踩坑：
+- **跨用户缓存泄漏**：`/me/permissions` 等 query key 静态（不带 user id），logout 只清 auth state 不清 React Query 缓存，登录 onSuccess 只 invalidate `['auth']` → 新用户命中旧缓存、60s staleTime 内不重新请求，必须强刷才更新。修：三端登录 onSuccess 改 `queryClient.clear()` + 登出处 `queryClient.clear()`。规则：**会话边界（登入/登出）必须清空整个 query cache**，否则所有非 user-keyed 缓存（权限/staff/门店）跨用户泄漏
+- **disabled 控件 native title tooltip 永不弹**：disabled 元素不派发鼠标事件 + shadcn Button 自带 `disabled:pointer-events-none`。修：tooltip 触发器挂到非 disabled 的 span 包裹器上，强制内部 disabled 子元素 pointer-events:none
+
+待完善（转 FR）：
+- T08 延后：`GET /roles/:code` 单条角色详情 + `GET /permissions` 全量权限列表（本批只做 /me/permissions，自定义角色 CRUD 留 Batch 7）
+- T10 完整回归（35 个测试场景 H1-H6/E1-E35 的端到端 Playwright）未自动跑
+- 品牌自定义角色 / 调整权限 CRUD 仍留 Batch 7
+
 ## 6. 验收命令
 
 后端：
