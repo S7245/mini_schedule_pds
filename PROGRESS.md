@@ -1,6 +1,6 @@
 # 课程预约实现进度
 
-更新时间：2026-05-29
+更新时间：2026-06-12
 
 状态：平台商业化第一阶段进行中
 
@@ -46,8 +46,8 @@
 | P0 | 支付异常补偿 | 需要从异常订单人工补偿开通订阅 |
 | P0 | Learner 额度硬限制 | Batch 4 Location / Batch 5 Staff 已接 SubscriptionGuard；Learner POST 接口落地时一并接（参数化 ResourceKind） |
 | P1 | Brand 初始化向导后续步骤 | Batch 4-5 完成第 1-3 步；第 4-8 步（课程分类/课程模板/权益/场次/小程序二维码）随后续 batch 逐步落地 |
-| P1 | RBAC enforcement + 数据权限 | Batch 5 完成 role/permission seed + 角色分配 API；middleware 拦截 + data_scope（role_default/assigned_locations/own_*）实际生效留 Batch 6 |
-| P1 | 品牌自定义角色 | Batch 5 完成 8 个预置 role_templates；品牌后台自建角色 / 调整权限 CRUD 留 Batch 6 |
+| ✅ | RBAC enforcement + 数据权限 | Batch 6 完成：service 层 require(code) + data_scope（role_default/assigned_locations/own_*）实际生效 |
+| ✅ | 品牌自定义角色 | Batch 7 完成：自建角色 / 调整权限 CRUD（B1 增量提权校验 + C1 缓存主动失效），2026-06-12 验收通过 |
 | P1 | 课程和场次 | CourseTemplate、ClassSession、资源占用 |
 | P1 | 学员权益 | Entitlement Product、Learner Entitlement、Hold、Consume、Adjust |
 | P1 | 学员预约 | 微信小程序品牌空间、课程表、预约、取消 |
@@ -316,9 +316,44 @@ Plan 文件：[pds/batches/batch-06-rbac-enforcement-data-scope-plan.md](batches
 - **disabled 控件 native title tooltip 永不弹**：disabled 元素不派发鼠标事件 + shadcn Button 自带 `disabled:pointer-events-none`。修：tooltip 触发器挂到非 disabled 的 span 包裹器上，强制内部 disabled 子元素 pointer-events:none
 
 待完善（转 FR）：
-- T08 延后：`GET /roles/:code` 单条角色详情 + `GET /permissions` 全量权限列表（本批只做 /me/permissions，自定义角色 CRUD 留 Batch 7）
+- T08 延后：`GET /roles/:code` 单条角色详情 + `GET /permissions` 全量权限列表（本批只做 /me/permissions，自定义角色 CRUD 留 Batch 7）→ ✅ Batch 7 已补
 - T10 完整回归（35 个测试场景 H1-H6/E1-E35 的端到端 Playwright）未自动跑
-- 品牌自定义角色 / 调整权限 CRUD 仍留 Batch 7
+- 品牌自定义角色 / 调整权限 CRUD 仍留 Batch 7 → ✅ Batch 7 已完成
+
+### Batch 7：品牌自定义角色 / 调整权限 CRUD ✅
+
+详细契约：[pds/batches/batch-07-custom-roles.md](batches/batch-07-custom-roles.md)
+测试场景：[pds/batches/batch-07-custom-roles-tests.md](batches/batch-07-custom-roles-tests.md)
+启动预备：[pds/batches/batch-07-custom-roles-prep.md](batches/batch-07-custom-roles-prep.md)
+
+契约状态：**已完成**（2026-06-12 端到端验收通过：E1–E8 + E4-编辑变体 + Happy #7/#8/#10 全绿）
+
+grill 设计树定论：A1 系统角色完全只读（可复制为自定义）｜A2 code 系统生成（前端只填 name）｜A3 scope_type 创建后锁定｜A4 有任职引用禁止删（`ROLE_IN_USE`）｜**B1 增量提权校验**（update 只对新增权限做 ⊆ actor 校验，保留/移除既有权限放行，owner 例外）｜C1 改角色后主动批量失效持有者缓存｜gate 新增 `role.manage`。
+
+完成内容：
+- 后端（`dev`，commits `ce5624e..e17cdd0`）：
+  - migration `000006`：seed `role.manage`（domain=role）+ 映射 brand_owner/brand_admin 模板 + **backfill 存量 brand**（owner 走 fast-path 自动有，brand_admin 必须 backfill）
+  - 错误码扩 4 个：`ROLE_IS_SYSTEM` / `ROLE_IN_USE`（均 409）/ `ROLE_PERMISSION_EXCEEDS_ACTOR`（403，data.exceeded）/ `ROLE_CODE_DUPLICATED`（409）
+  - repo：CreateBrandRole（gen `custom_<hex>`，is_system=FALSE，原始 code 不展开）/ UpdateBrandRole（事务全量替换权限）/ status / delete / CountAssignmentsByRole / ListBrandUserIDsByRole / ListRolePermissionCodes（B1 增量 diff）
+  - service：CRUD 全 gate `role.manage`；is_system 拦截、OWNER_PROTECTED 优先、A4 引用检查、B1 增量校验、A3 scope 锁定、C1 post-commit `checker.Invalidate` 批量失效
+  - handler：`GET /permissions`（按 domain 分组）、`GET /roles/:code`、`POST/PUT/PATCH status/DELETE /roles`
+  - 验收期修：`isUniqueViolation` 改 pgconn SQLSTATE 23505（修复手机号重复返 500 的线上 bug，~11 处调用点受益）
+- 前端（`dev`，commits `26a6d4f..eabac0f`）：
+  - `/roles` 角色管理页（列表 + 系统/自定义 badge + 权限 gate 按钮）
+  - 角色编辑器 Dialog（create/edit/copy，权限勾选树按 domain 分组，scope 编辑锁定，超 actor 权限项 disable+Hint）+ 系统角色只读视图
+  - `packages/api/roles.ts` CRUD hooks（mutation invalidate `['brand-roles']`）；`packages/types` 加 CreateRoleInput/UpdateRoleInput/PermissionGroup；`PERMISSIONS.ROLE_MANAGE`；工作台「角色管理」入口
+  - 验收期修：staff 列表失效用 `refetchType:'all'`（删员工后列表 stale 直到硬刷）；角色状态切换补 `ROLE_NOT_FOUND` 处理
+
+C1 验证证据（Redis 层）：员工预热 `rbac:perms:23` EXISTS=1 → owner PUT 去权限 200 → 瞬间 EXISTS=0（role→users 反查 DEL）→ 员工 60s 内重查权限即少一项，不依赖 TTL。
+
+本批踩坑：
+- **`isUniqueViolation` 字符串前缀匹配在 pgx 驱动下漏判**：pgx 错误串 `...(SQLSTATE 23505)` 无 `ERROR:` 前缀也不以 `duplicates` 结尾 → 唯一冲突误判为非冲突 → 业务错误降级成 500。修：`errors.As(*pgconn.PgError)` + code 23505。
+- **旧二进制掩盖新逻辑**：验收时 :8081 跑的是改码前的 `go run` 进程，B1 增量逻辑"看似失效"，重启后端即正常。验收前务必重建/重启后端。
+
+待完善（转 FR）：
+- `location.view` 前端无可见菜单/按钮门（`/locations` 管理页本身未建，Batch 4 FR 4.2 遗留）；Happy #7/#8 的"location 入口随权限消失"目前无 UI 体现，C1 仅在 API+Redis 层验证。决策：建 `/locations` 页时一并补 location.view 门。
+- 端到端 Playwright 回归（T11）仍为手动 Chrome 验收，未脚本化。
+- code-review 转移项：见 backend/web `.learnings/FEATURE_REQUESTS.md`（共享 isUniqueViolation 已修；GetRole 双查、缓存逐 key DEL、:id 参数命名、brand_owner 检查散落等）。
 
 ## 6. 验收命令
 
