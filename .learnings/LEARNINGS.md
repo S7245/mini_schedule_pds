@@ -175,3 +175,9 @@ Batch 6（RBAC enforcement + data_scope 落地）已业务验收通过。本批�
 - **code-review 发现的"潜在 bug"可能是线上活 bug**：本批 code-review 标记的共享 `isUniqueViolation` 脆弱字符串匹配，验收时直接以"手机号重复返 500"现形。教训：review 阶段标的 helper 级缺陷别一律转 FR，先判断有没有用户可见路径会触发。
 - **验收前重启/重建后端**：B1 增量逻辑被旧 `go run` 二进制掩盖，险些误判实现错误。验收 checklist 加一条"确认跑的是最新构建"。
 - **契约措辞要与前端可见 UI 对齐**：契约 Happy #7/#8 写"location 入口随权限消失"，但前端 `location.view` 根本没有可见门（`/locations` 页未建）。C1 只能在 API+Redis 层验证。写验收场景时，凡是"某权限驱动某 UI"，先确认该 UI 门已存在，否则场景无法在 UI 层验。
+
+## 2026-06-12 Batch 8 — 流程沉淀
+
+- **真实栈 e2e 比 mock 更值**：Batch 8 用真登录+真 CRUD+真 DB 的 Playwright，直接跑出 2 个共享底层 bug（204 DELETE 静默失败、persist 水合竞态），mock API 永远抓不到。代价是要管测试数据（唯一名 + teardown 软删）。
+- **验收要跑 prod build 不只 e2e**：dev server / e2e 不做全量 type-check，共享包漏声明 react 依赖在 dev 下隐身，只有 `pnpm build` 暴露。验收 checklist：e2e 通过 + 三端 `pnpm build` 通过。
+- **小批次也值得做**：Batch 8 本体（一个镜像页 + 导航）很小，但顺带补齐了 Batch 7 遗留的 location.view 门，且 e2e 挖出两个影响全栈的底层 bug。"补缺口"批次的真正价值常在副产物。

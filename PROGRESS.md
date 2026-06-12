@@ -355,6 +355,34 @@ C1 验证证据（Redis 层）：员工预热 `rbac:perms:23` EXISTS=1 → owner
 - 端到端 Playwright 回归（T11）仍为手动 Chrome 验收，未脚本化。
 - code-review 转移项：见 backend/web `.learnings/FEATURE_REQUESTS.md`（共享 isUniqueViolation 已修；GetRole 双查、缓存逐 key DEL、:id 参数命名、brand_owner 检查散落等）。
 
+### Batch 8：品牌门店管理页 `/locations` + location.view 门 + Playwright 回归 ✅
+
+详细契约：[pds/batches/batch-08-locations-page.md](batches/batch-08-locations-page.md)
+
+契约状态：**已完成**（2026-06-12 端到端验收通过：Playwright `e2e/batch-08-locations.spec.ts` 6/6 连跑两次稳定）
+
+背景：补齐 Batch 7 遗留的 `location.view` 前端门 + Batch 4 FR 4.2 的 `/locations` 管理页。**无后端改动**（location 后端 Batch 4 已完整：CRUD + 额度 guard + audit + 软删 + data_scope + 唯一名）。
+
+grill 决策：Playwright 真实跑通整个栈（真登录 owner + 真 CRUD + 真 DB + teardown 软删）｜门店删除引用保护转 FR｜UpdateStatus 保持 location.edit 门（toggle_status 暂闲置，转 FR）。
+
+完成内容：
+- 前端（`dev`，commits `5f62d5d..e698b8a`）：`/locations` 独立管理页（表格 name/address/phone/status badge + 状态筛选 + 分页 + 空状态）；行操作 编辑/停用切换(`LocationStatusToggle`)/删除(`ConfirmDialog`)，全部按 location.create/edit/delete gate + Hint；导航「门店管理」入口 + `NAV_HREF_PERMISSIONS['/locations']=location.view`（= Batch 7 缺的 location.view 可见门）。复用既有 location API hooks/类型/form-dialog/status-toggle，无新增。
+- e2e（`dev`，commits `9b947e9..2a85cad`）：`web/e2e/batch-08-locations.spec.ts` 真实栈回归 H1–H5+E1，自带 teardown 软删清理。
+- **验收期修 2 个共享底层 bug**（e2e 跑出来的，非门店功能本身）：
+  - `fe27ace` **API client 不认 204 空 body**：`client.ts` 无条件 `response.json()`，后端 DELETE 返 204 → SyntaxError → **所有 DELETE（staff/locations）静默失败**（弹窗不关、toast 删除失败，但后端实际已删）。修：先 `response.text()`，空 body ok→undefined、非 ok→通用错，非空再 parse。三端共用，向后兼容。
+  - `5b5001d` **硬 URL 水合竞态**：deep-link/刷新 protected route 时 zustand persist 未 rehydrate → `isAuthenticated` 瞬时 false → layout 跳 /login → middleware 拿 cookie 弹回 /dashboard。修：`packages/api/auth.ts` 加 SSR-safe `useAuthHydrated()`（初值 false，仅 client effect 读 persist），layout 跳转 effect + null gate 等 hydrated 后再判。顺带给 `packages/api` 补 react peerDependency（一直经 react-query 隐式依赖）。
+
+本批踩坑：
+- **dev server 不全量 type-check，`build` 才会**：`useAuthHydrated` 直接 `import 'react'` 在 dev 下能跑、e2e 也过，但 `packages/api` 没声明 react 依赖 → 生产 `pnpm build` 报 `Cannot find module 'react'`。教训：共享包新增直接依赖要同步 package.json；验收除 e2e 外必须跑一次 prod build。
+- ConfirmDialog 确认按钮文案是「删除」「停用」（actionLabel）而非「确定」，且与触发按钮同名 → e2e 确认点击必须 `getByRole('dialog')` scope。
+
+待完善（转 FR，见 web `.learnings/FEATURE_REQUESTS.md`）：
+- `app`/`admin` 两端 protected layout 可能有同款水合竞态，本批只修了 brand。
+- 门店删除引用保护（`LOCATION_IN_USE`：有员工任职/未来场次引用时禁删）。
+- `UpdateStatus` 改 gate `location.toggle_status`（现 location.edit，seed 的 toggle_status 闲置）。
+- 后端 location list 加 name 搜索（前端目前只有状态筛选+分页）。
+- 可选：加「店长权限门」e2e 用例（断言 location_manager 在 /locations 上写操作按钮全 disabled）。
+
 ## 6. 验收命令
 
 后端：
