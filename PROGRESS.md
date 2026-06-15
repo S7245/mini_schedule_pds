@@ -378,10 +378,27 @@ grill 决策：Playwright 真实跑通整个栈（真登录 owner + 真 CRUD + �
 
 待完善（转 FR，见 web `.learnings/FEATURE_REQUESTS.md`）：
 - `app`/`admin` 两端 protected layout 可能有同款水合竞态，本批只修了 brand。
-- 门店删除引用保护（`LOCATION_IN_USE`：有员工任职/未来场次引用时禁删）。
+- ~~门店删除引用保护（`LOCATION_IN_USE`）~~ → ✅ Batch 9 已做。
 - `UpdateStatus` 改 gate `location.toggle_status`（现 location.edit，seed 的 toggle_status 闲置）。
 - 后端 location list 加 name 搜索（前端目前只有状态筛选+分页）。
 - 可选：加「店长权限门」e2e 用例（断言 location_manager 在 /locations 上写操作按钮全 disabled）。
+
+### Batch 9：门店删除引用保护（LOCATION_IN_USE）✅
+
+详细契约：[pds/batches/batch-09-location-delete-guard.md](batches/batch-09-location-delete-guard.md)
+
+契约状态：**已完成**（2026-06-12 端到端验收通过：`e2e/batch-09-location-delete-guard.spec.ts` G1+G2 全过）
+
+背景：Batch 8 转 FR。门店软删（UPDATE deleted_at）不触发 FK 行为，留下悬空引用。镜像 Batch 7 A4 补引用保护。
+
+grill 决策：阻止删除的 active 引用 = 员工任职(`staff_location_assignments`) + 门店级角色任职(`brand_user_role_assignments.location_id`)；不前向检查 class_sessions/recurring_schedules（现无 CRUD/无数据）；active 状态过滤（两表硬删重插，只存 active 行）。
+
+完成内容：
+- 后端（`dev`，commits `e1bb789..8cd46c9`）：错误码 `LOCATION_IN_USE`(409)；repo `CountActiveReferences(brandID, locationID)`（两表 COUNT 求和，brand_id 隔离，status='active'）+ DB 单测（员工/角色引用、跨租户隔离、inactive 排除）；service.Delete 在 scope guard 后、SoftDelete 前插引用检查 + fake-repo 单测（拒删/放行）。
+- 前端（`dev`，commit `bef33d0`）：`errors.ts` 加 `LOCATION_IN_USE` + locations 页 confirmDelete 加 case → toast「该门店仍有员工任职或角色绑定，请先移除后再删除」，弹窗保持打开（同 ROLE_IN_USE）。
+- e2e（`dev`，commit `8fc6021`）：`batch-09-location-delete-guard.spec.ts`，UI 登录拿 token → page.request API 建门店+派员工 → G1 删被拦（toast+弹窗不关+行还在）、G2 移除任职后删成功，API teardown。
+
+转 FR：课程/场次批次落地后把 class_sessions/recurring_schedules 纳入同一 `CountActiveReferences`。
 
 ## 6. 验收命令
 
