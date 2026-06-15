@@ -400,6 +400,22 @@ grill 决策：阻止删除的 active 引用 = 员工任职(`staff_location_assi
 
 转 FR：课程/场次批次落地后把 class_sessions/recurring_schedules 纳入同一 `CountActiveReferences`。
 
+### Batch 10：小债清扫（4 项）✅
+
+详细契约：[pds/batches/batch-10-debt-sweep.md](batches/batch-10-debt-sweep.md)
+
+契约状态：**已完成**（2026-06-15 验收通过：e2e 1/1 + 手动 2 项）
+
+技术债打包清扫，来源 Batch 7/8/9 验收期 FR：
+- **T01 app/admin 水合竞态推广**（前端 `e16a375`）：`apps/app/.../layout.tsx` + `apps/admin/.../admin-guard.tsx` 接 Batch 8 的 `useAuthHydrated()`，消除 hard-load 误跳 /login（admin 守卫确有同款 race）。验收：owner deep-link+刷新 /locations 采样 300+ 次无一次跳 /login。
+- **T02/T06 location name 搜索**（前端 `ab48747` + 后端 `a403be5`）：后端 list 加 `q`（`name ILIKE '%q%'`，参数化）+ DB 单测；前端门店页加搜索框 + `useBrandLocations` 加 q。验收：搜索框 + 直连 API 同结果，确认 server-side 过滤。
+- **T03 GetRole 单查**（后端 `ff7a807`）：新 `GetBrandRoleWithPermissions`，去掉 GetRole 的 O(N) ListBrandRoles 扫描。
+- **T04 Checker.InvalidateMany**（后端 `d684667`）：角色缓存批量失效改单次多 key DEL（`cacheStore.Del` 加 variadic）；`invalidateRoleHolders` 改用。
+- **T05 role.IsOwnerRole()**（后端 `3c5ec78`）：收敛散落的 `"brand_owner"` 字面量；error-code 优先级（OWNER_PROTECTED 先于 ROLE_IS_SYSTEM）保持不变。
+- **T07 只读权限门 e2e**（`ee67e62`）：`batch-10-location-permission-gate.spec.ts`，只读账号 13900139777 在 /locations 写按钮全 disabled。
+
+T03/T04/T05 为行为不变重构（旧 RBAC 单测全绿，未改断言）。push：backend `a403be5`(dev)、web `ee67e62`(dev)、pds 本次。
+
 ## 6. 验收命令
 
 后端：
