@@ -1,6 +1,6 @@
 # 课程预约实现进度
 
-更新时间：2026-06-12
+更新时间：2026-06-16
 
 状态：平台商业化第一阶段进行中
 
@@ -48,7 +48,7 @@
 | P1 | Brand 初始化向导后续步骤 | Batch 4-5 完成第 1-3 步；第 4-8 步（课程分类/课程模板/权益/场次/小程序二维码）随后续 batch 逐步落地 |
 | ✅ | RBAC enforcement + 数据权限 | Batch 6 完成：service 层 require(code) + data_scope（role_default/assigned_locations/own_*）实际生效 |
 | ✅ | 品牌自定义角色 | Batch 7 完成：自建角色 / 调整权限 CRUD（B1 增量提权校验 + C1 缓存主动失效），2026-06-12 验收通过 |
-| P1 | 课程和场次 | CourseTemplate、ClassSession、资源占用 |
+| ✅ | 课程和场次 | Batch 11 完成：CourseCategory + CourseTemplate（分类+可用门店）+ 单场次 ClassSession 排课（教练时间冲突）。RecurringSchedule 循环排课 + Location Resource 资源管理留 Batch 12 |
 | P1 | 学员权益 | Entitlement Product、Learner Entitlement、Hold、Consume、Adjust |
 | P1 | 学员预约 | 微信小程序品牌空间、课程表、预约、取消 |
 | P2 | 候补机制 | 第一版可员工手动转正，自动候补后期补 |
@@ -415,6 +415,49 @@ grill 决策：阻止删除的 active 引用 = 员工任职(`staff_location_assi
 - **T07 只读权限门 e2e**（`ee67e62`）：`batch-10-location-permission-gate.spec.ts`，只读账号 13900139777 在 /locations 写按钮全 disabled。
 
 T03/T04/T05 为行为不变重构（旧 RBAC 单测全绿，未改断言）。push：backend `a403be5`(dev)、web `ee67e62`(dev)、pds 本次。
+
+### Batch 11：课程模板 + 单场次排课（CourseCategory / CourseTemplate / ClassSession）✅
+
+详细契约：[pds/batches/batch-11-course-template-session.md](batches/batch-11-course-template-session.md)
+测试场景：[pds/batches/batch-11-course-template-session-tests.md](batches/batch-11-course-template-session-tests.md)
+
+契约状态：**已完成**（2026-06-16 端到端验收通过：`e2e/batch-11-course-session.spec.ts` 6/6 全绿）
+
+grill 设计树定论（用户拍板，均推荐项）：D1 范围切「分类 + 模板 + 单场次」，推迟 RecurringSchedule 循环排课 + Location Resource 资源管理到 Batch 12｜D2 放开 `courses.difficulty/type` NOT NULL，新模板用通用 `level_label`（丢弃健身枚举）｜D3 原地替换 legacy brand `/courses`（api-app C 端只读 ListPublished 不动），状态词沿用 draft/published/archived｜D4 不挂额度门（blueprint §4.1）｜D5 session 接 data_scope（all_brand / assigned_locations），own_sessions 转 FR｜D6 class_sessions 纳入门店删除 guard。
+
+完成内容：
+- 后端（`dev`，commits `fb590ea..dfda127`）：
+  - migration `000007`：difficulty/type DROP NOT NULL + courses_status_valid CHECK + 9 细粒度权限码（course_category.* / course.create·edit·delete / session.view·create·cancel）+ role_template 映射 + 存量 brand backfill（镜像 000006，template_id JOIN）
+  - 错误码扩 11 个（CATEGORY_NOT_FOUND / CATEGORY_NAME_DUPLICATED / COURSE_NOT_ACTIVE / COURSE_IN_USE / COURSE_LOCATION_UNAVAILABLE / SESSION_NOT_FOUND / SESSION_TIME_INVALID / SESSION_INSTRUCTOR_CONFLICT / SESSION_CANCEL_NOT_ALLOWED / INSTRUCTOR_NOT_SCHEDULABLE，COURSE_NOT_FOUND 复用）
+  - 三个新域 coursecategory / coursetemplate / classsession（domain + application + persistence + handler）：CourseCategory CRUD；CourseTemplate CRUD（分类绑定 + course_location_availability 内联硬删重插，批量 list 避 N+1，gorm.DeletedAt 软删，CountScheduledSessions guard）；ClassSession 单场次（tx 内校验 course published / 门店可用 / 教练可排课，落 scheduled，教练时段重叠 DB EXCLUDE 23P01→SESSION_INSTRUCTOR_CONFLICT 不裸 500，list/detail JOIN 反范式名 + data_scope，cancel）
+  - brand handler 退役 legacy `/courses` 写路径 + 注册 3 新 handler，wire 干净重生（api-app 不动）
+  - onboarding CourseTemplate 计数 `active`→`published` 对齐；location CountActiveReferences 纳入 scheduled/in_progress class_sessions
+  - 11 个 repo DB 单测（course template + class session 全路径，含 23P01 冲突、软删、引用 guard）
+  - 验收期补 `GET /api/v1/brand/instructors?schedulable=true`（commit `dfda127`）：前端排课弹窗「可排课教练」下拉依赖此端点，后端原缺失→下拉恒空→排课阻断（见下踩坑）
+- 前端（`dev`，commits `708a4e2..417c884`）：
+  - types + 11 错误码常量 + 9 PERMISSIONS 常量；3 个 api client（course-categories / courses / class-sessions）
+  - `/course-categories`（表+状态切换+dialog）；`/courses`（替换 legacy 健身页：表/分类 chips/级别/时长·容量/可用门店数/状态，发布·归档/删除 COURSE_IN_USE，分类+门店多选 dialog）；`/courses/[id]`（详情+近期场次+编辑）；`/schedule`（场次表+门店/状态筛选，排课 dialog 门店→已发布课程→可排课教练→日期·时长，冲突 inline+toast，取消）
+  - 导航加「课程分类/课程模板/排课」+ NAV_HREF_PERMISSIONS 门；onboarding 第 4/5/7 步真实 CTA
+  - e2e `batch-11-course-session.spec.ts` 真实栈 H1/H3+H4/H5/E7/onboarding/E11，API teardown 自清理
+
+Post-impl code-review（high）：2 个 confirmed bug 当批修：
+- 后端 resolveLocationIDs：更新时传空 location_ids 误回填全部门店（应尊重「清空」）→ 加 defaultAllWhenEmpty，仅 create 默认全选
+- 前端课程 dialog：默认全选门店的 effect keying on locationIds.length，create 模式取消最后一个会被自动回填→改 ref 一次性默认
+
+验收（端到端通过）：
+- e2e 6/6：建分类→建课程（绑分类+默认全选门店）→发布→排单场次→同教练同时段冲突拦截→onboarding 4·5·7 completed→只读账号 13900139777 写按钮全 disabled
+- 后端 live curl 烟测同样全过（COURSE_NOT_ACTIVE / SESSION_INSTRUCTOR_CONFLICT / COURSE_IN_USE / cancel→204）
+
+本批踩坑：
+- **前端假设的端点后端没实现**：`packages/api/src/instructor.ts` 早标注 `ASSUMPTION (backend must match): GET /instructors?schedulable=true`，后端无此路由→排课教练下拉恒空→H5/E7/onboarding 全阻断；数据本身正常（张三 id=1 active+schedulable）。我的后端 curl 烟测**硬编码 instructor_profile_id=1 绕过了下拉**，所以没暴露，是 e2e 跑通 UI 全链路才抓到。教训：契约里「前端依赖的后端端点」必须显式列入 API 接口表并后端落地；纯 API 烟测不能替代走 UI 选择器的 e2e。
+- restart 后端用最新二进制（旧二进制掩盖改动）；前端 filter 用包名 `@mini-schedule/brand`（`--filter=brand` 报 No package found）；stale `.next` 致登录不跳转/退化成原生 GET，须 rm -rf .next 重启 + curl 预热。
+
+待完善（转 FR，见各仓库 `.learnings/FEATURE_REQUESTS.md`）：
+- RecurringSchedule 循环批量排课 + recurring_schedule_weekdays（Batch 12）
+- Location Resource CRUD + 资源时间冲突（session.location_resource_id 本批恒 null，Batch 12）
+- `own_sessions` 数据权限（教练只看自己授课场次）
+- 场次改期（reschedule）；课程分类 DELETE 接口（当前仅停用，e2e teardown 只能置 inactive）
+- Booking/Waitlist/Attendance/Entitlement（学员预约批次）
 
 ## 6. 验收命令
 

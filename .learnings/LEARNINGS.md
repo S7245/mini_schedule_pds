@@ -181,3 +181,14 @@ Batch 6（RBAC enforcement + data_scope 落地）已业务验收通过。本批�
 - **真实栈 e2e 比 mock 更值**：Batch 8 用真登录+真 CRUD+真 DB 的 Playwright，直接跑出 2 个共享底层 bug（204 DELETE 静默失败、persist 水合竞态），mock API 永远抓不到。代价是要管测试数据（唯一名 + teardown 软删）。
 - **验收要跑 prod build 不只 e2e**：dev server / e2e 不做全量 type-check，共享包漏声明 react 依赖在 dev 下隐身，只有 `pnpm build` 暴露。验收 checklist：e2e 通过 + 三端 `pnpm build` 通过。
 - **小批次也值得做**：Batch 8 本体（一个镜像页 + 导航）很小，但顺带补齐了 Batch 7 遗留的 location.view 门，且 e2e 挖出两个影响全栈的底层 bug。"补缺口"批次的真正价值常在副产物。
+
+## 2026-06-16 Batch 11 — 流程沉淀
+
+### 1. 契约的「API 接口表」必须含前端依赖的所有后端端点
+本批前端 api client 早注明 `ASSUMPTION (backend must match): GET /instructors?schedulable=true`，但契约 API 表只列了 course/session 的 CRUD，漏了排课弹窗拉教练列表这个读端点 → 后端按表实现 → 该端点缺失 → 排课全链路 UI 阻断，直到验收 e2e 才暴露。规则：grill 阶段把「每个前端选择器/下拉拉哪个后端 list 端点」显式列进契约 API 表；起飞前 grep 全仓 `ASSUMPTION` 兜底。
+
+### 2. 纯 API 烟测不能替代走 UI 选择器的 e2e
+主线程后端 curl 烟测全绿（happy + 全 edge），但**硬编码 instructor_profile_id 绕过了教练下拉**，所以没抓到缺端点的 bug。是用户开的测试 session 跑 UI e2e（真点下拉）才暴露。结论：涉及 UI 选择器拉列表的功能，验收必须有走真实选择器的 e2e；API 烟测只证明「最终写接口对」，不证明「UI 能填出这个请求」。
+
+### 3. 主线程直接实现 + 验收期外部 session 跑 e2e 的协作模式有效
+用户拒绝 spawn 实现 subagent，改主线程逐 task TDD commit；e2e 由用户另开 session 跑（主线程给自包含 prompt）。外部 session 不仅跑通还自行定位+修了缺端点 bug 并 commit。模式成立：主线程产出 + 自包含 handoff prompt（含账号/端口/重启铁律/包名 filter/.next 坑）让外部 session 能独立闭环。
