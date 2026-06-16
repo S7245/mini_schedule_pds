@@ -459,12 +459,12 @@ Post-impl code-review（high）：2 个 confirmed bug 当批修：
 - 场次改期（reschedule）；课程分类 DELETE 接口（当前仅停用，e2e teardown 只能置 inactive）
 - Booking/Waitlist/Attendance/Entitlement（学员预约批次）
 
-### Batch 12a：Location Resource 资源管理（拆自 Batch 12，先做）⏳
+### Batch 12a：Location Resource 资源管理（拆自 Batch 12，先做）✅
 
 详细契约：[pds/batches/batch-12a-location-resource.md](batches/batch-12a-location-resource.md)
 测试场景：[pds/batches/batch-12a-location-resource-tests.md](batches/batch-12a-location-resource-tests.md)
 
-契约状态：**实现完成，待业务验收（会话内确认）**。契约已会话内 approve。
+契约状态：**已完成**（2026-06-16 会话内业务验收通过：后端契约——错误码分流 / 容量优先级 input>资源>课程 / 反范式字段 / 软删 / 跨引用拒删——与前端 UI——toast 文案 / 弹窗不关 / 按钮门控 / 下拉过滤 / 容量自动填充——全部对齐）。契约 + 验收均会话内确认。
 
 grill 定论（用户拍板，均推荐项）：Batch 12 拆 12a（资源管理，本批）+ 12b（循环排课）｜资源端点扁平 `/location-resources?location_id=`｜新增 `location_resource.view/create/edit/delete` 4 码 + role 映射 + backfill（migration 000008，不动表结构）｜资源 data_scope 接 assigned_locations｜软删带引用保护 RESOURCE_IN_USE（被 scheduled/in_progress 场次或 active 循环排课引用时拒删）｜资源/教练冲突按约束名分流（新 `SESSION_RESOURCE_CONFLICT`）｜单场次可选绑资源 + 容量优先级 input>资源>课程默认｜门店删除 guard 纳入 active 资源｜前端新建 `/resources` 导航页 + 排课弹窗加资源级联下拉。
 
