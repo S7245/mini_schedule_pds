@@ -192,3 +192,17 @@ Batch 6（RBAC enforcement + data_scope 落地）已业务验收通过。本批�
 
 ### 3. 主线程直接实现 + 验收期外部 session 跑 e2e 的协作模式有效
 用户拒绝 spawn 实现 subagent，改主线程逐 task TDD commit；e2e 由用户另开 session 跑（主线程给自包含 prompt）。外部 session 不仅跑通还自行定位+修了缺端点 bug 并 commit。模式成立：主线程产出 + 自包含 handoff prompt（含账号/端口/重启铁律/包名 filter/.next 坑）让外部 session 能独立闭环。
+
+## 2026-06-16 Batch 12a — 流程沉淀
+
+### 1. 大主题先 grill「是否拆批」，拆按依赖单向排序
+Batch 12（循环排课+资源管理）grill 第一问就是拆不拆。两特性依赖单向（recurring 可选绑 resource），拆 12a（资源，先）+ 12b（循环排课，后，复用资源选择器）。每批独立 e2e/验收，依赖方向干净。结论：一个「主题」含两个各自完整纵切片（migration/domain/app/persistence/handler/前端/e2e）时，默认拆，按依赖先后排，别贪一批。
+
+### 2. 后批的设计决策可在前批 grill 时一次性预定，写进 PROGRESS
+12b（循环排课）的关键决策（部分失败 SAVEPOINT、0 成功 abort、非级联 cancel、复用 session.*、时区）在 12a 的 grill 里一并和用户拍板，写进 PROGRESS 的 12b 占位段。好处：12b 起飞直接写契约，不重新 grill；坏处：需在 12a 验收后复核是否仍成立。
+
+### 3. 提前为「后批才有数据」的引用写 guard，避免返工
+12a 的资源 Delete guard 和门店 Delete guard 都把 active recurring_schedules 一并 COUNT 进去（12b 落地前恒 0）。表已在 000003 建好，提前写引用检查零成本，省 12b 回头改两处 guard。
+
+### 4. AskUserQuestion 批量预决策 + 「均推荐项」模式延续
+沿用 Batch 11 的 grill→AskUserQuestion（4 问，每问首选标推荐）→用户一次性拍板模式。本批 4 问（拆批/0成功处理/cancel语义/资源UI放置+删除策略）全选推荐，零返工进入契约。

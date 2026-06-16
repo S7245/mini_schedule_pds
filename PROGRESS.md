@@ -459,6 +459,29 @@ Post-impl code-review（high）：2 个 confirmed bug 当批修：
 - 场次改期（reschedule）；课程分类 DELETE 接口（当前仅停用，e2e teardown 只能置 inactive）
 - Booking/Waitlist/Attendance/Entitlement（学员预约批次）
 
+### Batch 12a：Location Resource 资源管理（拆自 Batch 12，先做）⏳
+
+详细契约：[pds/batches/batch-12a-location-resource.md](batches/batch-12a-location-resource.md)
+测试场景：[pds/batches/batch-12a-location-resource-tests.md](batches/batch-12a-location-resource-tests.md)
+
+契约状态：**实现完成，待业务验收（会话内确认）**。契约已会话内 approve。
+
+grill 定论（用户拍板，均推荐项）：Batch 12 拆 12a（资源管理，本批）+ 12b（循环排课）｜资源端点扁平 `/location-resources?location_id=`｜新增 `location_resource.view/create/edit/delete` 4 码 + role 映射 + backfill（migration 000008，不动表结构）｜资源 data_scope 接 assigned_locations｜软删带引用保护 RESOURCE_IN_USE（被 scheduled/in_progress 场次或 active 循环排课引用时拒删）｜资源/教练冲突按约束名分流（新 `SESSION_RESOURCE_CONFLICT`）｜单场次可选绑资源 + 容量优先级 input>资源>课程默认｜门店删除 guard 纳入 active 资源｜前端新建 `/resources` 导航页 + 排课弹窗加资源级联下拉。
+
+完成内容：
+- 后端（`dev`，commits `da6f363..<fix>`）：migration `000008`（4 权限码 + role 映射 + 存量 backfill，不动表）；5 错误码（RESOURCE_NOT_FOUND/NAME_DUPLICATED/IN_USE/NOT_AVAILABLE + SESSION_RESOURCE_CONFLICT）；新域 `locationresource`（domain/service/persistence/handler，镜像 location/classsession，data_scope + 软删 + 反范式 location_name + Delete 引用保护）；class-session 绑资源（`isExclusionViolation`→`exclusionConstraint` 返约束名 + `sessionConflictError` 按 `class_sessions_resource_no_overlap` 分流资源冲突；容量优先级 input>资源>课程；LEFT JOIN resource_name）；location `CountActiveReferences` 纳入 active 资源；14 个新 DB/service 单测全绿。
+- 前端（`dev`）：types + `location-resources` api client/hooks + 5 错误码 + 4 权限码 + nav「资源管理」+ NAV_HREF_PERMISSIONS 门；`/resources` 页（门店筛选+表+表单弹窗+停用切换+删除确认 RESOURCE_IN_USE）；排课弹窗资源级联下拉 + 选中自动填容量 + 新错误映射；/schedule 表加资源列。
+- code-review（high，3 finder agents）：2 项当批修（资源 id<=0 归一未绑定；Update 显式 brand_id 防御性隔离）；其余转 FR（见下）。
+- 验证：`go build ./...` + `go test ./...` 全绿（含 Postgres 集成）；`pnpm --filter @mini-schedule/brand lint + build` 全过。
+
+待业务验收（e2e）：场景见测试文件 H1-H7 + E1-E10（建资源/重名/绑资源排课/资源冲突拦截/停用拒排/RESOURCE_IN_USE/只读 disabled/门店 guard）。e2e 由用户另开 session 跑真实栈。
+
+code-review 转 FR（见各仓库 `.learnings`）：exclusionConstraint 空约束名退化路径（pgx 实际恒填，理论项）；Delete guard TOCTOU（与现有 LOCATION_IN_USE/COURSE_IN_USE 同类，DB 约束兜底重叠但不挡删后绑）；inactive 资源仍被未来场次引用（blueprint §20.5 设计：已排未来场次不自动取消，编辑场次时提示资源已停用——提示待实现）。
+
+### Batch 12b：RecurringSchedule 循环排课（拆自 Batch 12，后做）
+
+grill 定论：单外层 tx + 逐 occurrence SAVEPOINT 部分成功（冲突跳过返清单）｜0 成功生成时整批 abort 返 409+skipped 不落空壳｜非级联 cancel（status→cancelled 不动已生成场次，blueprint 不做整批取消）+ 复用 session.* 权限（无新权限 migration）｜生成时区 Asia/Shanghai（per-brand TZ 转 FR）｜门店删除 guard 纳入 active recurring_schedules。契约 12a 验收后再写。
+
 ## 6. 验收命令
 
 后端：
