@@ -206,3 +206,17 @@ Batch 12（循环排课+资源管理）grill 第一问就是拆不拆。两特�
 
 ### 4. AskUserQuestion 批量预决策 + 「均推荐项」模式延续
 沿用 Batch 11 的 grill→AskUserQuestion（4 问，每问首选标推荐）→用户一次性拍板模式。本批 4 问（拆批/0成功处理/cancel语义/资源UI放置+删除策略）全选推荐，零返工进入契约。
+
+## 2026-06-17 Batch 12b — 流程沉淀
+
+### 1. 前批预定的后批决策直接成契约，零重新 grill
+12b 的全部架构决策（SAVEPOINT 部分成功/0 成功 abort/非级联 cancel/复用 session.*/时区/门店 guard）在 12a grill 时已和用户拍板并写进 PROGRESS 占位段。12b 起飞只需把唯一未定项（生成上限）用 AskUserQuestion 拍板（26 周+200 节），其余直接写契约 → 会话内 approve → 实现。预定决策显著压缩了 grill 轮次。
+
+### 2. 提前为后批写 guard/复用点零返工兑现
+12a 的资源 Delete guard + 门店 CountActiveReferences 已提前 COUNT recurring（落地前恒 0）；12b 落地时门店 guard 只加一段 recurring COUNT，资源侧零改动。exclusionConstraint/sessionRow/容量优先级 12a 已抽好，12b 直接复用。「为下一批提前留接口」在 12a→12b 实测零返工。
+
+### 3. E2E 用「UI 可视化 + API 直连」混合，按 edge 性质选通道
+回归 17/17：happy path + 冲突/校验/权限的可视化部分走 chrome-devtools UI；XOR/越界/资源/级联/权限走后端 API 直连（前端 radio 已强制二选一时，XOR 只能 API 验）。混合比纯 UI 省且覆盖更全。回归结论单独成文件 batch-NN-regression-result.md，含 teardown 清单 + 复跑要点（自动化坑）。
+
+### 4. 「每批合并 main」纳入收尾流程
+2026-06-16 起约定：验收 push dev 后 backend/web 的 dev FF 合并进 main（git push origin dev:main）。pds 直接在 main。12b 起每批收尾固定执行。

@@ -48,7 +48,7 @@
 | P1 | Brand 初始化向导后续步骤 | Batch 4-5 完成第 1-3 步；第 4-8 步（课程分类/课程模板/权益/场次/小程序二维码）随后续 batch 逐步落地 |
 | ✅ | RBAC enforcement + 数据权限 | Batch 6 完成：service 层 require(code) + data_scope（role_default/assigned_locations/own_*）实际生效 |
 | ✅ | 品牌自定义角色 | Batch 7 完成：自建角色 / 调整权限 CRUD（B1 增量提权校验 + C1 缓存主动失效），2026-06-12 验收通过 |
-| ✅ | 课程和场次 | Batch 11 完成：CourseCategory + CourseTemplate（分类+可用门店）+ 单场次 ClassSession 排课（教练时间冲突）。RecurringSchedule 循环排课 + Location Resource 资源管理留 Batch 12 |
+| ✅ | 课程和场次 | Batch 11（分类+模板+单场次排课）+ Batch 12a（Location Resource 资源管理+场次绑资源+资源冲突）+ Batch 12b（RecurringSchedule 循环排课）全部完成。下一主线：Booking/学员预约 |
 | P1 | 学员权益 | Entitlement Product、Learner Entitlement、Hold、Consume、Adjust |
 | P1 | 学员预约 | 微信小程序品牌空间、课程表、预约、取消 |
 | P2 | 候补机制 | 第一版可员工手动转正，自动候补后期补 |
@@ -478,9 +478,22 @@ grill 定论（用户拍板，均推荐项）：Batch 12 拆 12a（资源管理�
 
 code-review 转 FR（见各仓库 `.learnings`）：exclusionConstraint 空约束名退化路径（pgx 实际恒填，理论项）；Delete guard TOCTOU（与现有 LOCATION_IN_USE/COURSE_IN_USE 同类，DB 约束兜底重叠但不挡删后绑）；inactive 资源仍被未来场次引用（blueprint §20.5 设计：已排未来场次不自动取消，编辑场次时提示资源已停用——提示待实现）。
 
-### Batch 12b：RecurringSchedule 循环排课（拆自 Batch 12，后做）
+### Batch 12b：RecurringSchedule 循环排课（拆自 Batch 12，后做）✅
 
-grill 定论：单外层 tx + 逐 occurrence SAVEPOINT 部分成功（冲突跳过返清单）｜0 成功生成时整批 abort 返 409+skipped 不落空壳｜非级联 cancel（status→cancelled 不动已生成场次，blueprint 不做整批取消）+ 复用 session.* 权限（无新权限 migration）｜生成时区 Asia/Shanghai（per-brand TZ 转 FR）｜门店删除 guard 纳入 active recurring_schedules。契约 12a 验收后再写。
+详细契约：[pds/batches/batch-12b-recurring-schedule.md](batches/batch-12b-recurring-schedule.md)
+测试场景：[pds/batches/batch-12b-recurring-schedule-tests.md](batches/batch-12b-recurring-schedule-tests.md)
+回归结论：[pds/batches/batch-12b-regression-result.md](batches/batch-12b-regression-result.md)
+
+契约状态：**已完成**（2026-06-17 E2E 回归 17/17 全过：H1-H5 + E1-E11）。契约 + 验收均会话内确认。
+
+完成内容：
+- 后端（`dev`）：新域 `recurringschedule`（domain/service/persistence/handler）。**无 migration**（表 000003 已建，权限复用 `session.view/create/cancel`）。service 校验（weekday/XOR 结束条件/26 周·200 节上限/start_date≥今天/Asia/Shanghai +08:00 occurrence 生成）；repo 外层 tx 插 recurring+weekdays → 批级校验一次 → 逐 occurrence GORM 嵌套 tx(SAVEPOINT) 插场次，撞 EXCLUDE 按约束名分流 instructor/resource_conflict 跳过记清单、继续；0 成功整批 abort RECURRING_ALL_CONFLICT 不落空壳；复用 12a `exclusionConstraint`/`sessionRow`/容量优先级 input>资源>课程；非级联 cancel；门店 guard 纳入 active recurring。3 错误码。8 service + 7 DB 单测全绿。
+- 前端（`dev`）：/schedule 加「单场次/循环排课」Tabs；循环弹窗（周几多选+起止二选一+资源级联+容量填充+生成结果清单）+ 列表/详情/非级联取消确认；复用 session.* 门控。
+- code-review（high，3 agents）：3 修（repeat_weeks 不回填派生 end_date 保 XOR / 容量自动填充优先级守卫 / 结束条件客户端校验）；exclusionConstraint 退化沿用 12a FR。
+- 验证：`go test ./...` + `pnpm --filter @mini-schedule/brand lint+build` 全过。
+- 回归观察（非阻断）：>200 节守卫被 26 周上限遮蔽（182<200，纵深防御）；class-sessions list DTO 不暴露 recurring_schedule_id（GET :id 聚合正确）；全冲突错误内联呈现非 toast。
+
+grill 定论：单外层 tx + 逐 occurrence SAVEPOINT 部分成功（冲突跳过返清单）｜0 成功生成时整批 abort 返 409 RECURRING_ALL_CONFLICT+skipped 不落空壳｜非级联 cancel（status→cancelled 不动已生成场次，blueprint 不做整批取消）+ 复用 session.view/create/cancel 权限（无新权限 migration）｜生成时区 Asia/Shanghai（per-brand TZ 转 FR）｜周几=time.Weekday 0-6｜结束条件 end_date/repeat_weeks 二选一｜上限 26 周 & 200 节｜容量 input>资源>课程｜门店删除 guard 纳入 active recurring_schedules。
 
 ## 6. 验收命令
 
