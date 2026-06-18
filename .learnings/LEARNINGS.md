@@ -220,3 +220,17 @@ Batch 12（循环排课+资源管理）grill 第一问就是拆不拆。两特�
 
 ### 4. 「每批合并 main」纳入收尾流程
 2026-06-16 起约定：验收 push dev 后 backend/web 的 dev FF 合并进 main（git push origin dev:main）。pds 直接在 main。12b 起每批收尾固定执行。
+
+## 2026-06-18 Batch 13a — 流程沉淀
+
+### 1. 大主题先盘「表已建 vs 代码已建」+ 确认前置缺口，再拆批
+Batch 13（学员预约闭环）grill 第一步核对 migration 000003：18 张学员/预约表全已建但**零代码**，且 brand `/users`+`/trainings` 是 legacy app_users（与 brand_learner_profiles 无关）→ 学员档案是真前置缺口。据此把大主题拆 5 子批单向链（13a 学员→13b 权益→13c 预约→{13d 候补,13e 签到}），先做最前置的 13a 学员档案（最小、立刻给测试库造学员）。教训：交接说「表已建」不等于「有 CRUD」，grill 必落到 `ls internal/domain` + grep handler/api-client 实证，别按表存在就假设功能在。
+
+### 2. 主线程逐 task TDD + 外部 session 跑 e2e 模式继续有效
+延续 11/12：主线程 7 task（migration→domain/persistence+DB测→service+单测→handler+wire→前端 api→前端页→验证）逐 commit，不 spawn 实现 subagent；e2e 给自包含 prompt 由用户另开 session 跑（H1-H9+E1-E11 全过）。本批 code-review 用 2 个并行 review subagent（后端/前端各一），真抓到 2 个 P1（软删 unique 缺 partial filter；编辑弹窗外键 seeding 静默写入/清空）——纯主线程自检大概率漏，review subagent 值。
+
+### 3. 复用错误码先核对真实 HTTP status，别照抄记忆
+契约错误码表把复用的 `QUOTA_EXCEEDED` 写成 403，实际 SubscriptionGuard 自 Batch 4 起返 409（e2e 抓到，非阻断）。规则：契约表里「复用」的错误码，HTTP status 要回查 error.go / 调用点真实值，不凭印象填。
+
+### 4. AskUserQuestion 一次拍 4 个分叉 + 均推荐项，延续
+13a 起飞前 1 个 AskUserQuestion 4 问（拆批粒度/先做哪端/13a 范围/取消后重约 unique）全选推荐，零返工进契约。其中「取消后重约改 partial unique」的决策在 13a 顺手发现并修了 brand_identity 同类漏写（partial filter），属预决策外溢收益。

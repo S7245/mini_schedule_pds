@@ -495,6 +495,40 @@ code-review 转 FR（见各仓库 `.learnings`）：exclusionConstraint 空约�
 
 grill 定论：单外层 tx + 逐 occurrence SAVEPOINT 部分成功（冲突跳过返清单）｜0 成功生成时整批 abort 返 409 RECURRING_ALL_CONFLICT+skipped 不落空壳｜非级联 cancel（status→cancelled 不动已生成场次，blueprint 不做整批取消）+ 复用 session.view/create/cancel 权限（无新权限 migration）｜生成时区 Asia/Shanghai（per-brand TZ 转 FR）｜周几=time.Weekday 0-6｜结束条件 end_date/repeat_weeks 二选一｜上限 26 周 & 200 节｜容量 input>资源>课程｜门店删除 guard 纳入 active recurring_schedules。
 
+### Batch 13：学员预约闭环（Entitlement / Booking / Waitlist / Attendance）⏳ 进行中
+
+交接 prompt：[pds/batches/batch-13-handoff.md](batches/batch-13-handoff.md)
+
+grill + 拆批拍板（2026-06-17 会话内，均推荐项）：
+
+- **schema 现实**：18 张学员/预约表已在 `000003` 建好，**零代码**（brand `/users`、`/trainings` 是 legacy `app_users` / 健身训练记录，与 `brand_learner_profiles` 无关）。`SubscriptionGuard.ResourceLearner` / `MaxLearners` 已就绪。api-app C 端极薄（仅 `GET /courses`）。
+- **拆批**：5 子批，单向依赖链 **13a 学员档案 → 13b 权益产品+发放 → 13c 预约下单+规则+场次取消级联回改 → {13d 候补, 13e 签到+履约+爽约}**。
+- **先做哪端**：全程 brand 后台 staff_assisted（复用 RBAC/data_scope/audit/UI 零新基建）；C 端 api-app + 微信自助预约延后到独立批（Batch 14），届时只是 `source=learner_self_service` 的薄认证包装。
+- **13a 范围**：核心档案 CRUD + 冻结/解冻 + 标签；无微信学员用合成 open_id `manual:<brand>:<phone>`（find-or-create by phone）；员工服务关系延后。
+- **取消后重约**：bookings / waitlist_entries 的 `unique(session,learner)` 是全量唯一 → 13c 加 migration 改 **partial unique**（仅 active 状态），重约 INSERT 新行保留取消历史。
+- **核心难点（13c）**：下单原子性——单 tx 内 `SELECT FOR UPDATE` session 行（booked_count<capacity）+ entitlement 行（lock 模型）+ INSERT booking(unique) + hold(unique)，行锁+unique+CHECK 兜超卖/抢最后课时。
+- **跨批回改（13c 必做）**：B11/12b 的 `ClassSession.Cancel` 当前只置 `status=cancelled`，bookings 落地后必须级联 cancel 所有 active booking（cancel_source=session_cancelled）+ release holds + cancel waitlist。
+
+#### Batch 13a：学员档案管理（BrandLearnerProfile + 标签）✅
+
+详细契约：[pds/batches/batch-13a-learner-profile.md](batches/batch-13a-learner-profile.md)
+测试场景：[pds/batches/batch-13a-learner-profile-tests.md](batches/batch-13a-learner-profile-tests.md)
+
+契约状态：**已完成**（2026-06-18 会话内业务验收通过：e2e H1–H9 + E1–E11 全过，两条回归修复验证生效；仅 2 条非阻断文档/可选 finding）。
+
+完成内容：
+- 后端（`dev`，5 commits `117fb53..e3dea8c`）：migration `000009`（`learner.create/edit/delete/freeze` 4 写码 + role 映射仅 brand_owner/brand_admin + 存量 backfill，镜像 000008；`learner.view` 沿用 000003，粗码 `learner.manage` 转 inert）+ `000010`（`idx_brand_learner_profiles_brand_identity` 改 partial `WHERE deleted_at IS NULL`，修软删后无法重建）；6 错误码；新域 `learner`（domain/service/persistence/handler 镜像 location/locationresource）——Create 单 tx：`CheckAndCount(ResourceLearner)` 配额 → find-or-create identity by phone（合成 open_id `manual:<phone>`，并发回查）→ INSERT profile（两 unique 按约束名分流 `LEARNER_ALREADY_EXISTS`/`LEARNER_NO_DUPLICATED`）→ tag 硬删重插（校验 ⊆ brand active）→ audit；data_scope on `primary_location_id`（assigned 员工建档须指定 scope 内主门店）；软删 + `countLearnerActiveReferences`（active 权益 + 未结束预约，13b/13c 前恒 0）；标签 CRUD（品牌级，仅停用不硬删）。**DB 单测 11 + service 单测 10 全绿。**
+- 前端（`dev`，3 commits `7848492..13f3a89`）：types + 2 api client（登记 exports）+ 6 错误码 + 5 权限码；`/learners`（搜索 q/状态/门店筛选 + 分页 + 行操作 gate+Hint + `LEARNER_IN_USE` 弹窗保持）+ LearnerFormDialog（手机号 create 必填/edit 锁定、主门店/学号/备注/标签 chip、QUOTA toast+inline）+ LearnerStatusToggle（freeze 门）+ `/learners/[id]` 详情（基础信息 + 标签 + 权益/预约/履约 Tab 空态占位）+ `/learner-tags` 页；导航 legacy `/users` 换真实 `/learners` + 新增 `/learner-tags` + `NAV_HREF_PERMISSIONS` 接 learner.view 门。
+
+Post-impl code-review（2 review agent）→ 5 项当批修：
+- P1 软删后无法重建（`brand_identity` unique 缺 `deleted_at IS NULL` filter）→ migration 000010 + 回归单测。
+- P1 编辑弹窗主门店 seeding：无主门店学员在列表筛着门店时编辑被静默写入筛选门店；主门店已停用时下拉缺该选项静默清空 → 编辑只用学员当前值 + 并入当前（含停用）门店选项。
+- P2 标签改名/改色失效 `brand-learners`/`brand-learner`（内嵌标签快照）；P2 inactive 学员隐藏冻结入口；P2 跨表失效。
+
+验收（e2e 全过）：建分类档案/标签/筛选/权限门可视化走 UI；额度门 E5 / data_scope E6 / 无效标签 E4 走 API 直连。两条非阻断 finding：E5 `QUOTA_EXCEEDED` 实际 409（非契约误写的 403，已改文档对齐，自 Batch 4 约定）；E9 空手机号文案「请输入合法手机号」（已对齐测试文档）。
+
+转 FR（见各仓库 `.learnings`）：学员列表搜索框 debounce；repo `UpdateStatus` 源态加固（service 已挡 inactive→frozen，repo 层未挡）；员工服务关系 `learner_staff_assignments`（顾问/主教练/跟进人，喂 instructor「自己相关学员」data_scope）；学员批量导入；微信 openid 回填合成身份；legacy `/users`(app_users) 页退役。下一子批：**13b 权益产品 + 发放**。
+
 ## 6. 验收命令
 
 后端：
