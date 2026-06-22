@@ -234,3 +234,17 @@ Batch 13（学员预约闭环）grill 第一步核对 migration 000003：18 张�
 
 ### 4. AskUserQuestion 一次拍 4 个分叉 + 均推荐项，延续
 13a 起飞前 1 个 AskUserQuestion 4 问（拆批粒度/先做哪端/13a 范围/取消后重约 unique）全选推荐，零返工进契约。其中「取消后重约改 partial unique」的决策在 13a 顺手发现并修了 brand_identity 同类漏写（partial filter），属预决策外溢收益。
+
+## 2026-06-18 Batch 13b — 流程沉淀
+
+### 1. grill 先 grep 000003 已 seed 的权限码，复用胜过拆新码
+13b grill 发现 000003 早已 seed `entitlement.view/manage/adjust` 且语义对上 §20.9/§21.1，只是映射不全。决策复用粗码 + migration 只补缺失映射（不加码不动表），比 13a 的细码方案更省。规则：新域权限先 `grep 'domain\.' 000003`，粗码语义合用就复用补映射；细码只在 §21 角色对该域有「部分写」需求时才拆（13a learner owner/admin 写、余只读才需细码）。
+
+### 2. 用户拍板可偏离推荐项——尊重并落地（settle 落库）
+13b 4 问里「expired/depleted 处理」用户选了**非推荐**的「现在就落库」（推荐是惰性派生）。落地为「读触发 sweep + 写后落库」的无 cron 方案满足「落库」诉求。教训：推荐项是默认不是强制；用户偏离时按其意图找可行实现，别硬套推荐。
+
+### 3. 外部验收 session 跑契约 + 自行定位修阻断缺陷，主线程收编
+13b 用户 session 跑 21 场景契约 + settle psql 实查，自行定位+修了阻断 F1（ListProducts 漏 scope ids），改动留在主线程工作树未提交。主线程职责：**先 review 该外来改动**（读 diff 确认根因+方案正确）→ 验证 build/test → 补回归单测（外部修了代码但常没补测）→ 收编进收尾 commit。延续 11 起「主线程产出 + 外部 session e2e」模式，且外部 session 已能改代码不只报 bug。
+
+### 4. settle/派生态落库类验收必须 psql 实查，不能信前端显示
+expired/depleted「落库」与否前端派生显示看不出差异，验收必须 `psql SELECT status` 实查 DB（已写进 13b 测试场景执行方式）。这类「读触发副作用写库」的特性，验收通道要能看到 DB 真值。

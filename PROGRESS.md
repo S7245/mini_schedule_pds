@@ -529,6 +529,26 @@ Post-impl code-review（2 review agent）→ 5 项当批修：
 
 转 FR（见各仓库 `.learnings`）：学员列表搜索框 debounce；repo `UpdateStatus` 源态加固（service 已挡 inactive→frozen，repo 层未挡）；员工服务关系 `learner_staff_assignments`（顾问/主教练/跟进人，喂 instructor「自己相关学员」data_scope）；学员批量导入；微信 openid 回填合成身份；legacy `/users`(app_users) 页退役。下一子批：**13b 权益产品 + 发放**。
 
+#### Batch 13b：权益产品 + 发放（EntitlementProduct / LearnerEntitlement / Transaction）✅
+
+详细契约：[pds/batches/batch-13b-entitlement.md](batches/batch-13b-entitlement.md)
+测试场景：[pds/batches/batch-13b-entitlement-tests.md](batches/batch-13b-entitlement-tests.md)
+
+契约状态：**已完成**（2026-06-18 会话内业务验收通过：e2e 21 场景全过 + settle 落库 psql 实查确认；阻断缺陷 F1 已修并复验）。
+
+完成内容：
+- 后端（`dev`，6 commits `45ed444..f62c263`）：migration `000011`（复用 000003 的 `entitlement.view/manage/adjust`，仅补 §21.1 缺失的 3 条角色映射 brand_admin.adjust/course_operator.view/finance_support.adjust + 存量 backfill，**不加新码、不动表**）；7 错误码；新域 `entitlement`（domain/service/persistence/handler）——产品 CRUD（启停不软删；scope all/specific + location/course 关联硬删重插，**存在性校验**；count-based total 必填 / membership total NULL；限额 0→NULL；issued_count + location_ids/course_ids 批量回填避 N+1）；grant 单 tx（校验学员属本 brand + 产品 active，快照额度，expires=starts+validity_days，落权益 + grant 流水 + audit）；**settle 落库**（`SettleStatus` 纯函数 + 读触发 per-learner sweep + grant/adjust/status 后落库，无 cron）；adjust `SELECT FOR UPDATE` + remaining±delta（<0 或不限次→INSUFFICIENT）+ settle + 流水 + audit；status freeze/cancel/reactivate（cancelled 终态）；无 data_scope（品牌级，§21）。**DB 单测 18 + service 单测 12 + domain 单测全绿。**
+- 前端（`dev`，3 commits `9a12a8f..16790c0`）：types + 2 api client（登记 exports）+ 7 错误码 + 3 权限码；`/entitlement-products` 产品页（表 + 状态筛选 + 启停 + 表单弹窗：type 锁定/total 仅 count-based/频次 0=不限/门店·课程 scope 多选）；学员详情「权益」Tab 落地（替换 13a 占位）：列表（剩余/总·不限次·到期·状态 badge）+ 发放弹窗 + 调整弹窗（±delta+原因，INSUFFICIENT inline）+ 冻结/作废/恢复 + 流水弹窗；导航「权益产品」+ NAV_HREF_PERMISSIONS。
+
+Post-impl code-review（2 review agent，无 P0）→ 5 项当批修 + 验收期 F1：
+- 后端 P2：门店 scope 校验放宽为存在性（同课程，避免编辑产品时停用门店/归档课程被强拒）；ListEntitlementsByLearner 加学员属本 brand 守卫→404；`SettleStatus` 加表驱动单测。
+- 前端 P1：产品表单把当前 scope 里已停用门店/已归档课程并入选项（标「已停用/已归档」，可见可取消，镜像 learner-form）；发放后失效 `brand-entitlement-products` 修 issued_count 滞后。
+- **F1（验收阻断，用户 session 定位+修，本端收编+补回归测）**：ListProducts 漏填 location_ids/course_ids（仅 GetProduct 填）→ specific 产品列表显示「0 门店」且从列表行编辑 scope 不回填→保存校验失败。修：加 `loadScopeIDs` 批量回填。
+
+验收（e2e 21 场景全过）：产品建/改/启停、发放（次卡/会员卡不限次）、调整±/超额 INSUFFICIENT/不限次拒、冻结/作废/恢复、cancelled 终态、stale 产品 scope 编辑、issued_count 刷新；**settle 落库 psql 实查确认** expired/depleted 真写 DB；权限 backfill（course_operator/finance view、调整 403）。
+
+转 FR（见各仓库 `.learnings`）：发放生效日时区（与 12b per-brand TZ 合并）；产品次数 zod min(0) 文案（仅顶层 apiError，无 inline）；权益到期/额度提醒通知。下一子批：**13c Booking 下单**（依赖 13b 权益 lock 模型——hold 复用 SettleStatus + `SELECT FOR UPDATE`）。
+
 ## 6. 验收命令
 
 后端：
