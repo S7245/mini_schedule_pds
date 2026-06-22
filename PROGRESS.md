@@ -549,6 +549,21 @@ Post-impl code-review（2 review agent，无 P0）→ 5 项当批修 + 验收期
 
 转 FR（见各仓库 `.learnings`）：发放生效日时区（与 12b per-brand TZ 合并）；产品次数 zod min(0) 文案（仅顶层 apiError，无 inline）；权益到期/额度提醒通知。下一子批：**13c Booking 下单**（依赖 13b 权益 lock 模型——hold 复用 SettleStatus + `SELECT FOR UPDATE`）。
 
+#### Batch 13c：预约下单 + 代取消 + 场次取消级联（Booking / EntitlementHold）⏳ 契约待 approve
+
+交接 prompt：[pds/batches/batch-13c-handoff.md](batches/batch-13c-handoff.md)
+详细契约：[pds/batches/batch-13c-booking.md](batches/batch-13c-booking.md)
+
+grill 拍板（2026-06-22 会话内，5 决策点）：
+- **策略配置**：仅 brand-default `GET/PUT` 单行 upsert（复用 `schedule.view/manage`，零新权限码）；per-location + 场次 override CRUD 延后，解析层仍读已存覆盖行。
+- **权益选择**：自动选择（§5.7）+ 允许员工手动指定（仍全校验，非法报错不回退）。
+- **满员**：返 `SESSION_FULL`，13c 完全不碰 waitlist（留 13d）。
+- **取消语义**：默认 release（退名额+退权益）；`release_on_cancel=false`→forfeit consume；场次取消恒退；no_show 留 13e。
+- **越权**：404 不泄漏存在性（镜像既有约定）。
+- **schema 复核关键发现**：booking.* 权限映射在 000003 base 已对全角色 seed 齐（吻合 §21.1/21.2，存量已 backfill）→ **13c 无需权限迁移**；migration **000012** 仅 bookings/waitlist 全量 unique → partial(`status<>'cancelled'`)。`brand_booking_policies` 无 monthly 列（月限独家来自权益产品）。
+- **核心难点**：下单原子性——统一锁序「先锁 session 行、再锁 entitlement 行」，TX-1 下单 / TX-2 代取消 / TX-3 场次取消级联三事务串行化同一 session 行；行锁+unique+CHECK 兜超卖/抢课时。
+- **跨批回改（必做）**：`class_session_repository.go:238 Cancel` 加 `SELECT FOR UPDATE` + 级联 cancel 所有 active booking(`session_cancelled`) + release holds + booked_count=0。
+
 ## 6. 验收命令
 
 后端：
