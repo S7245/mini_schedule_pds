@@ -578,6 +578,20 @@ grill 拍板（2026-06-22 会话内，5 决策点）：
 - **核心难点**：下单原子性——统一锁序「先锁 session 行、再锁 entitlement 行」，TX-1 下单 / TX-2 代取消 / TX-3 场次取消级联三事务串行化同一 session 行；行锁+unique+CHECK 兜超卖/抢课时。
 - **跨批回改（必做）**：`class_session_repository.go:238 Cancel` 加 `SELECT FOR UPDATE` + 级联 cancel 所有 active booking(`session_cancelled`) + release holds + booked_count=0。
 
+#### Batch 13d：候补机制（Waitlist 加入 / 手动转正 / 跳过取消 / 场次取消级联）⏳ 契约待 approve
+
+详细契约：[pds/batches/batch-13d-waitlist.md](batches/batch-13d-waitlist.md)
+
+grill 拍板（2026-06-22 会话内，4 决策点，均推荐项）：
+- **转正模型**：手动转正 + 容量门（promote 锁 session 校 `booked_count<capacity` 锁后复验）；**不做 booking 取消时自动标 eligible_to_promote**（零 cancel↔waitlist 耦合，状态机实际只用 waiting）。
+- **加入入口**：独立 endpoint `POST /bookings/waitlist`；13c 代预约弹窗满员时显示「加入候补」。
+- **候补配置**：effective policy（allow_waitlist + waitlist_limit 解析 override，同 13c）；`waitlist_limit=0`=不限（allow_waitlist 控开关）。
+- **候补 UI**：场次维度 drawer（场次行→候补名单 + 转正/跳过/取消）。
+- **关键发现**：**13d 零 migration、零权限迁移**——waitlist_entries 表(000003)+两条 partial unique(000012 已建)+booking.*(seed 齐) 全就绪。
+- **核心复用**：转正=抽 13c `Create` 步骤 3-6 为共享 `placeBooking`（Create staff_assisted / Promote waitlist_promotion 共用）；候补不锁权益、转正才锁(§22.4)。
+- **跨批回改**：扩 13c `ClassSession.Cancel` 级联——cancel 活跃候补(waiting/eligible→cancelled)。
+- 锁定默认：转正无权益走 auto/manual/none+跳过；brand staff_assisted（C 端 14）；data_scope 同 13c；W1 锁 session 串行化 position。
+
 ## 6. 验收命令
 
 后端：
