@@ -248,3 +248,17 @@ Batch 13（学员预约闭环）grill 第一步核对 migration 000003：18 张�
 
 ### 4. settle/派生态落库类验收必须 psql 实查，不能信前端显示
 expired/depleted「落库」与否前端派生显示看不出差异，验收必须 `psql SELECT status` 实查 DB（已写进 13b 测试场景执行方式）。这类「读触发副作用写库」的特性，验收通道要能看到 DB 真值。
+
+## 2026-06-22 Batch 13c — 预约下单（全闭环最硬一批）流程沉淀
+
+### 1. grill 第一步「核对 schema 真实约束」常能砍掉整张迁移
+13c 预期要补 booking 角色映射 migration，但 grill 阶段逐表核对 000003 发现 `booking.*` 三码 + 全角色映射(吻合 §21.1/21.2)是 base 自带、存量 brand 建库即 copy → **零权限迁移**，migration 000012 只剩 partial-unique 一项。还顺带发现 `brand_booking_policies` 无 monthly 列（月限独家来自 entitlement_products）。规则：grill「数据模型边界」必须 grep 真实 migration 的约束/seed，别照搬 handoff 假设——handoff 也可能过度预估工作量。
+
+### 2. 5 决策点 grill 全选推荐，零返工进契约（延续 11/12b 模式）
+拆批/范围用 AskUserQuestion（上限 4 问/次，第 5 项「越权 404/403」因有 13a/13b/classsession 强先例直接锁 404 写契约不再问）。决策点：策略配置面体量、权益自动+手动、满员不碰 waitlist、取消 release 边界、越权语义。全选推荐项，contract 一次过 approve。
+
+### 3. code-review 抓到 struct 单测结构上测不到的 P0（HTTP 序列化）
+后端 DB/service 单测全绿、prod build 通过，但 `domain.Policy` 漏 json tag 导致 GET 响应 PascalCase、前端 snake_case 读全 undefined——**纯 struct 单测 + TS 类型都拦不住运行时 JSON 形状 mismatch**，只有 code-review（对照前后端契约）或 e2e 才现形。沉淀：凡 domain struct 经 REST 返回，契约审查要核对「序列化键名」这一维，或加一个 `json.Marshal` 形状断言。已写进各仓 ERRORS 的 Pending exposure。
+
+### 4. 三事务统一锁序是「下单原子性」grill 的核心产出
+grill 画出 TX-1 下单 / TX-2 代取消 / TX-3 场次取消级联三事务的 tx 边界与并发点，定「先 session 后 entitlement」统一锁序 + 跨批回改 ClassSession.Cancel 加锁。写契约前 grill 透并发点，实现期零返工。下一子批 **13d 候补** 需扩 TX-3 级联取消 waitlist_entries（已在契约/PROGRESS 标注前向依赖）。

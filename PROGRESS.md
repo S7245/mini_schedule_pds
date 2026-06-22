@@ -549,10 +549,24 @@ Post-impl code-review（2 review agent，无 P0）→ 5 项当批修 + 验收期
 
 转 FR（见各仓库 `.learnings`）：发放生效日时区（与 12b per-brand TZ 合并）；产品次数 zod min(0) 文案（仅顶层 apiError，无 inline）；权益到期/额度提醒通知。下一子批：**13c Booking 下单**（依赖 13b 权益 lock 模型——hold 复用 SettleStatus + `SELECT FOR UPDATE`）。
 
-#### Batch 13c：预约下单 + 代取消 + 场次取消级联（Booking / EntitlementHold）⏳ 契约待 approve
+#### Batch 13c：预约下单 + 代取消 + 场次取消级联（Booking / EntitlementHold）✅
 
 交接 prompt：[pds/batches/batch-13c-handoff.md](batches/batch-13c-handoff.md)
 详细契约：[pds/batches/batch-13c-booking.md](batches/batch-13c-booking.md)
+测试场景：[pds/batches/batch-13c-booking-tests.md](batches/batch-13c-booking-tests.md)
+
+契约状态：**已完成**（2026-06-22 会话内业务验收通过：Happy + Edge + 级联 + 权限/越权全过；code-review P0 已修复并复验）。
+
+完成内容：
+- 后端（`dev`，6 commits `4d623ae..aabd7bf`）：migration `000012`（bookings/waitlist 全量 unique → partial `status<>'cancelled'`；**无权限迁移**——booking.* 三码及全角色映射 000003 base 已 seed 齐、存量已 copy）+ 14 错误码；新域 `booking`（domain/service/persistence/handler/wire 镜像 classsession/entitlement）——**TX-1 下单**单 tx：锁 session(scope/scheduled/窗口/容量) → 学员可预约 → auto(§5.7 纯函数排序)/manual(锁行全校验)/none 占位 → booked_count++ → INSERT booking(partial unique 分流 BOOKING_DUPLICATE) → 锁 entitlement(remaining--/locked++/re-settle) → hold + 流水(带 booking_id/hold_id；不限次 Δ0/balance NULL)；**TX-2 代取消**：锁 session+booking → allow_cancel/deadline → cancelled+退名额 → hold release(退额) / forfeit(release_on_cancel=false→consumed)；**TX-3 场次取消级联回改** `class_session_repository.Cancel`：加 SELECT FOR UPDATE + 级联 cancel active booking(session_cancelled)+release holds(恒退)+booked_count=0。统一锁序「先 session 后 entitlement」三事务串行化；频次叠加取最严(policy∪product，月限独家产品，UTC 日/周/月+concurrent，policy 级预检挡误报)；data_scope on session.location(越权 404)；brand-default 策略 GET/PUT(复用 schedule.view/manage)。**DB 单测 16 + service 单测 8 + domain 单测全绿。**
+- 前端（`dev`，2 commits `71ec5ca..0fd1c4e`）：types + 2 api client（登记 exports）+ 14 错误码 + 权限码(BOOKING_*+SCHEDULE_*)；`/bookings`（DataTable+状态/待补权益筛选+分页+权限门，代预约弹窗：学员/场次选择器+权益模式 radio[自动预览/手动下拉/占位原因]+usable-entitlements+14 错误码 inline+代取消 ConfirmDialog）+ `/booking-policy`（brand-default 策略表单，可空限额留空=不限，gate schedule.manage 写）+ 学员详情「预约」Tab 替换 13a 占位 + 导航 + NAV_HREF_PERMISSIONS。跨查询失效 bookings/class-sessions/learner-entitlements。
+
+Post-impl code-review（2 review agent）→ 1 项 P0 当批修：
+- **P0 Policy 缺 json tag**：domain `Policy` struct 无 json tag + Gin 默认 encoding/json → `GET /booking-policy` 返回 PascalCase，前端按 snake_case 读全 undefined → 预约规则页读/写/存全坏（后端单测用 struct 直传未暴露，仅 HTTP 层现形）。修：10 字段补 snake_case tag（可空 *int 不加 omitempty 保留 null=不限）+ TestPolicyJSONSnakeCase 回归。
+
+验收（全过）：代预约(自动/手动/占位)、列表/待补权益筛选、代取消、取消后重约(partial unique)、满员/并发抢名额/窗口/频次/重复/手动非法不回退/占位不绕容量、**场次取消级联 psql 实查**(全 booking cancelled+holds released+退额+booked_count=0)、权限门(course_operator 403)、越权 404、**release/不限次卡 hold psql 实查落库**；/booking-policy snake_case 响应复验。
+
+转 FR（见各仓库 `.learnings`）：23514 CHECK 违反裸 500（正常路径行锁+预检已挡，建议加兜底分流，镜像 23505）；频次限额跨场次 TOCTOU（软策略，无数据损坏，需 advisory lock 才严格）；代预约弹窗关闭态仍拉一次 class-sessions（`useBrandClassSessions` 缺 enabled 门）；cancel_deadline 对员工代取消同样生效（员工绕过留 FR）；预约窗口/截止 per-brand 时区（合并 12b TZ FR）。**下一子批：13d 候补（waitlist）**——满员转候补 + 取消转正 + 扩 TX-3 级联取消 waitlist_entries。
 
 grill 拍板（2026-06-22 会话内，5 决策点）：
 - **策略配置**：仅 brand-default `GET/PUT` 单行 upsert（复用 `schedule.view/manage`，零新权限码）；per-location + 场次 override CRUD 延后，解析层仍读已存覆盖行。
