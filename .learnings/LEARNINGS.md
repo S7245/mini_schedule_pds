@@ -262,3 +262,17 @@ expired/depleted「落库」与否前端派生显示看不出差异，验收必�
 
 ### 4. 三事务统一锁序是「下单原子性」grill 的核心产出
 grill 画出 TX-1 下单 / TX-2 代取消 / TX-3 场次取消级联三事务的 tx 边界与并发点，定「先 session 后 entitlement」统一锁序 + 跨批回改 ClassSession.Cancel 加锁。写契约前 grill 透并发点，实现期零返工。下一子批 **13d 候补** 需扩 TX-3 级联取消 waitlist_entries（已在契约/PROGRESS 标注前向依赖）。
+
+## 2026-06-22 Batch 13d — 候补（零 migration 批 + 跨批代码复用）
+
+### 跨批 learning 闭环生效：13c 的 P0 在 13d 被主动预防
+13c 的 P0 是「domain struct 漏 json tag → HTTP PascalCase」。13d 新 `waitlist.Entry` 建 struct 时即加 snake_case json tag，code-review 显式复核确认无复发。证明：把上批 ERRORS 的 Pending exposure 升级成「建 struct 即加 tag」的固定动作，跨批闭环有效。沉淀的经验要落成「下批起飞前的 checklist 动作」，不只是记录。
+
+### 零 migration 批：grill 的 schema 现实核对再次砍掉迁移
+13d 候补：waitlist_entries 表(000003)+两条 partial unique(13c 000012 已顺手改)+booking.* 权限(seed 齐) → **零 migration、零权限码**。与 13c 同样是 grill 第一步核对真实 schema/seed 得出。规则延续：grill「数据模型边界」必核 migration 真实约束 + 权限 seed，常能把预估的迁移砍光。
+
+### 跨批代码复用 = 抽共享核心 + 复跑前批全测试证零回归
+13d 转正复用 13c 下单：抽 `placeBooking` 共享核心，前置差异留各调用方（Create 校 window，Promote 不校）。**正确性保障 = 复跑 13c 全部 DB 测试绿**（而非只测新路径）。新 repo 持 `&前批repo{db}` 调其 tx-only 方法，事务边界完整。这是「新批复用前批逻辑」的标准做法。
+
+### 派生态 stale 是交互 e2e 专属发现（单测/build 抓不到）
+13d 验收 2 个 finding 都是派生态不刷新（drawer 头部容量冻结快照、行候补徽标不随 mutation 刷新）。类型检查+build 全过，只有真实点击流暴露。规则：验收脚本对「模态/行内的派生计数/容量」要专门验「操作后即时刷新」，别只验「操作成功」。

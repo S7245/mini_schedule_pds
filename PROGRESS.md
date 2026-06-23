@@ -578,9 +578,25 @@ grill 拍板（2026-06-22 会话内，5 决策点）：
 - **核心难点**：下单原子性——统一锁序「先锁 session 行、再锁 entitlement 行」，TX-1 下单 / TX-2 代取消 / TX-3 场次取消级联三事务串行化同一 session 行；行锁+unique+CHECK 兜超卖/抢课时。
 - **跨批回改（必做）**：`class_session_repository.go:238 Cancel` 加 `SELECT FOR UPDATE` + 级联 cancel 所有 active booking(`session_cancelled`) + release holds + booked_count=0。
 
-#### Batch 13d：候补机制（Waitlist 加入 / 手动转正 / 跳过取消 / 场次取消级联）⏳ 契约待 approve
+#### Batch 13d：候补机制（Waitlist 加入 / 手动转正 / 跳过取消 / 场次取消级联）✅
 
 详细契约：[pds/batches/batch-13d-waitlist.md](batches/batch-13d-waitlist.md)
+测试场景：[pds/batches/batch-13d-waitlist-tests.md](batches/batch-13d-waitlist-tests.md)
+验收报告：[pds/batches/batch-13d-waitlist-acceptance-report.md](batches/batch-13d-waitlist-acceptance-report.md)
+
+契约状态：**已完成**（2026-06-22 会话内业务验收通过：Happy + Edge + 级联 + 权限/越权全过；验收期修 2 项 UX 瑕疵）。
+
+完成内容：
+- 后端（`dev`，6 commits `211fcc2..2d19729`）：**零 migration、零权限码**（waitlist 表 000003 + partial unique 000012 + booking.* seed 齐全就绪）。**抽 13c `Create` 步骤 3-6 为共享 `placeBooking`**（Create staff_assisted / Promote waitlist_promotion 共用，零回归——13c 全测试复跑绿）；新域 `waitlist`（domain/service/persistence/handler/wire）+ 6 错误码——**W1 加入**（锁 session 串行化 position/满员/allow_waitlist/limit(0=不限)/已约/已候补/不锁权益）｜**W2 手动转正**（锁 session+entry/校 waiting+容量/`placeBooking`→entry promoted+booking_id）｜**W3 跳过(skipped+reason)/取消(cancelled)**｜**W4 名单**（按 position+data_scope）｜**TX-3 级联扩展**（场次取消再 cancel 活跃候补）。`waitlistRepository` 持 `bookingRepository` 复用 placeBooking（同包，方法只用 tx，事务边界完整）。data_scope 同 13c（越权 404）。**DB 单测 6（含级联）+ service 4 + 路由冲突冒烟 + 13c 全回归绿；`go build/test ./...` 全绿（29 包）。**
+- 前端（`dev`，3 commits `9e63dc7..635a732`）：types + waitlist api client（登记 exports）+ 6 错误码；WaitlistDrawer（名单 + 转正/跳过/取消 + 权限门 + 满员转正禁用）+ PromoteDialog（复用 13c 权益模式子块）+ `/schedule` 场次行「候补 (N)」入口 + 代预约弹窗满员「加入候补」。**lint 0 err + prod build 通过。**
+
+Post-impl code-review（2 review agent）→ **零 P0/P1/P2**（特别确认 `waitlist.Entry` 有 snake_case json tag，13c 同类 P0 不复现——吸取教训从一开始就加）。
+
+验收（全过）：满员加入候补(position 递增)、名单 drawer、腾位后手动转正(auto 选权益)、转正落库 psql 实查(source=waitlist_promotion/booked_count/扣额/promoted_booking_id)、转正无权益占位/跳过、未满/超限/重复/已约边界、满员转正 SESSION_FULL、非 waiting NOT_PROMOTABLE、**场次取消级联候补 psql 实查**、权限门 403、越权 404。
+
+验收期修 2 项 UX 瑕疵（前端 + 全栈，非阻断）：① drawer 头部容量/转正门控用冻结快照不刷新 → schedule 存 `waitlistRef` + `useMemo` 从 live items 派生（转正失效 brand-class-sessions → 实时刷新）；② 场次行「候补」无人数徽标 → 后端 list baseQuery 加 `waitlist_count` 相关子查询（命中 partial index）+ 前端「候补 (N)」+ join/skip/cancel 失效 brand-class-sessions。（第 3 项「禁用按钮缺 Hint」复查为 e2e 误判，代码已有 `<Hint>`，无需改。）
+
+转 FR（见各仓库 `.learnings`）：候补转正微信订阅通知；自动转正（cancel 即顺位）；候补位置手动调整/插队；满员场次受 list page_size=100 限制（既有非回归）。**下一子批：13e 签到 + 履约 + 爽约**（booked→attended/pending_no_show/no_show、hold→consumed、no_show_consumes 真扣课、占位预约签到提醒）。
 
 grill 拍板（2026-06-22 会话内，4 决策点，均推荐项）：
 - **转正模型**：手动转正 + 容量门（promote 锁 session 校 `booked_count<capacity` 锁后复验）；**不做 booking 取消时自动标 eligible_to_promote**（零 cancel↔waitlist 耦合，状态机实际只用 waiting）。
