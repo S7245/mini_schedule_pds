@@ -608,6 +608,21 @@ grill 拍板（2026-06-22 会话内，4 决策点，均推荐项）：
 - **跨批回改**：扩 13c `ClassSession.Cancel` 级联——cancel 活跃候补(waiting/eligible→cancelled)。
 - 锁定默认：转正无权益走 auto/manual/none+跳过；brand staff_assisted（C 端 14）；data_scope 同 13c；W1 锁 session 串行化 position。
 
+#### Batch 13e：签到 / 履约 / 爽约（标到课 + 结束场次 + 确认爽约 + hold 收口）✅
+
+详细契约：[pds/batches/batch-13e-attendance.md](batches/batch-13e-attendance.md)
+测试场景：[pds/batches/batch-13e-attendance-tests.md](batches/batch-13e-attendance-tests.md)
+
+**2026-06-24 验收通过（Happy H1-H9 + Edge E1-E10 + 权限 P1-P4 + TX-3 回归 C1-C2 全 PASS；30 DB 单测全绿；prod build exit 0）。已 push + dev FF main。** Batch 13（学员预约闭环）**五子批全闭环**，下一批 **Batch 14 C 端微信自助预约**（source=learner_self_service 薄包装）。
+
+- **关键发现**：**13e 零 migration、零权限码**——attendance_records/entitlement_consumptions/session_records 三表 + 两条 unique（防重签/防重复消费同 hold）+ bookings/holds/txns 状态枚举 + attendance.* 三码及角色映射，全在 000003 已就绪（dev DB 保持 v12）。第 2 个零 migration 批（继 13d）。
+- **grill 拍板（2026-06-24，4 决策点，均推荐项）**：①PendingNoShow 触发=**显式「结束场次」action**（session scheduled/in_progress→completed + 未签到 booked 批量→pending_no_show；completed 不可取消 → **TX-3 零改动**）②签到/爽约**并入 booking 域**（非独立域）③UI=**/schedule 场次行 drawer**（镜像 13d 候补 drawer）④占位预约（requires_entitlement_fix）**可签到但不消费、保留 fix 标志**（§13.2）。
+- **核心复用**：consume 收口 = 新 sibling 自由函数 `settleHoldForOutcome`（与取消的 `settleHoldOnCancel` 并列）——consume 路径 = forfeit 骨架 + 加 `entitlement_consumptions`(unique hold) + 关联 attendanceID + txn 带 consumption_id；release 路径 = 镜像取消 release。`insertBookingTransaction` 加 `consumption_id` 形参（3 处取消调用点传 nil，复跑 13c/13d 全测试证零回归）。
+- **状态机**：CanAttend(booked|pending_no_show)——后者为「结束场次后补签纠错」天然替代撤销误签到；CanConfirmNoShow(仅 pending_no_show)。签到/结束/爽约**不动 booked_count**（只取消退名额）。锁序沿用 session→booking→entitlement。并发靠 attendance unique + consumption unique + 行锁。
+- **结束场次权限**=`attendance.mark`（非 session.cancel/schedule.manage——前台/instructor 有 attendance.* 但无 session.*，签到员工须能结束场次）；端点落 `POST /class-sessions/:id/end`（命名空间一致）。
+- **code-review（2 路 reviewer）零 P0/P1**：唯一 P1 经两路互证为非 bug——爽约**退课**响应 `hold=null`（baseQuery 既有 join 过滤 released，**与 13c 取消退课一致**），前端 RecordsTab 据 `requires_entitlement_fix`(占位) vs `no_show`+null-hold(退课) 准确区分，履约 Tab 显示正确。当批修 2 个 P2：行级签到禁用（共享 isPending 误禁整列）、invalidateBooking 补 entitlement-transactions 失效。
+- 转 FR（见各仓库 `.learnings`）：占位签到 toast/标签文案弱于契约建议（落库正确，仅文案）；爽约退课响应直出 released 产品名（须改 baseQuery DISTINCT ON 并回归 13c）；撤销误签到（§20.12 人工权益调整）；批量一键签到；场次行 attended/no_show 计数徽标；session_records 富履约数据。**Batch 13 闭环完成，转 Batch 14。**
+
 ## 6. 验收命令
 
 后端：

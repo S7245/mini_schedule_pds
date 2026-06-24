@@ -276,3 +276,17 @@ grill 画出 TX-1 下单 / TX-2 代取消 / TX-3 场次取消级联三事务的 
 
 ### 派生态 stale 是交互 e2e 专属发现（单测/build 抓不到）
 13d 验收 2 个 finding 都是派生态不刷新（drawer 头部容量冻结快照、行候补徽标不随 mutation 刷新）。类型检查+build 全过，只有真实点击流暴露。规则：验收脚本对「模态/行内的派生计数/容量」要专门验「操作后即时刷新」，别只验「操作成功」。
+
+## 2026-06-24 Batch 13e — 签到/履约/爽约（第 2 个零 migration 批 + 双 reviewer 互证）
+
+### 零 migration 批连续命中：grill schema 现实核对的复利
+继 13d 后第 2 个零 migration/零权限批——三表+两 unique+状态枚举+attendance.* 权限映射全在 000003。grill 逐表/逐 seed 核对（不默认要迁移）是关键：13b 发现缺要补、13c/13d/13e 都省掉整张迁移。
+
+### 跨批回改先证伪「需要改」：TX-3 零改动靠状态机闭合
+13e 不改 TX-3——用「completed 不可取消 + pending_no_show 只在 completed」证明级联永不触及新态。回改判定先尝试证伪，省掉防御性扩展。
+
+### 双 reviewer 互证把疑似 P1 收敛为非 bug
+后端 reviewer 报「退课响应 hold=null 违契约 P1」，前端 reviewer 证「RecordsTab 已据 requires_entitlement_fix 正确区分 + 与 13c 一致」→ 收敛为契约 prose 过激、非 bug。独立双视角交叉验证避免误修（改 baseQuery 会回归 13c）。契约文案应对齐既有实现，不反之。
+
+### 撤销误签到用状态机天然替代（pending_no_show→attended）
+签到接受 pending_no_show（结束场次后补签）即天然纠错，免做 undo（§20.12 撤销留人工）。决策时优先找状态机已有路径替代新功能。
