@@ -61,7 +61,9 @@ pending_no_show ──确认爽约[attendance.no_show_confirm]──▶ no_show
 |---|---|---|---|---|
 | POST | `/bookings/:id/attend` | `attendance.mark` | `note?`（≤1000） | `Booking`（status=attended，含 hold.status=consumed） |
 | POST | `/class-sessions/:id/end` | `attendance.mark` | — | `{ session_id, status: "completed", pending_no_show_count }` |
-| POST | `/bookings/:id/no-show` | `attendance.no_show_confirm` | `reason?`（≤1000） | `Booking`（status=no_show，含 hold.status=consumed/released） |
+| POST | `/bookings/:id/no-show` | `attendance.no_show_confirm` | `reason?`（≤1000） | `Booking`（status=no_show；扣课→hold.status=consumed；**退课→hold=null**，见下注） |
+
+> **code-review 结论（released hold 响应）**：`baseQuery` 的 hold join 带 `h.status <> 'released'`（13c 既有），故爽约**退课**路径返回的 `Booking.hold=null`（与 13c 取消退课一致，非 bug，DB 内 hold 确为 released）。前端 `RecordsTab` 据 `requires_entitlement_fix`（占位）与 `no_show`+hold=null（退课）准确区分，履约 Tab 显示「已退回（退课）」正确。如需响应直出 released 产品名 → 改 baseQuery（DISTINCT ON booking_id ORDER BY id DESC）但须回归 13c 取消列表，转 FR。
 
 **复用现有端点（零新增 GET）**：
 - 签到 drawer 名单：`GET /bookings?class_session_id=:id&page_size=100`（`booking.view`，返回 status + hold，已 JOIN 课程/门店/学员）。
