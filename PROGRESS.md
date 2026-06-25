@@ -623,6 +623,41 @@ grill 拍板（2026-06-22 会话内，4 决策点，均推荐项）：
 - **code-review（2 路 reviewer）零 P0/P1**：唯一 P1 经两路互证为非 bug——爽约**退课**响应 `hold=null`（baseQuery 既有 join 过滤 released，**与 13c 取消退课一致**），前端 RecordsTab 据 `requires_entitlement_fix`(占位) vs `no_show`+null-hold(退课) 准确区分，履约 Tab 显示正确。当批修 2 个 P2：行级签到禁用（共享 isPending 误禁整列）、invalidateBooking 补 entitlement-transactions 失效。
 - 转 FR（见各仓库 `.learnings`）：占位签到 toast/标签文案弱于契约建议（落库正确，仅文案）；爽约退课响应直出 released 产品名（须改 baseQuery DISTINCT ON 并回归 13c）；撤销误签到（§20.12 人工权益调整）；批量一键签到；场次行 attended/no_show 计数徽标；session_records 富履约数据。**Batch 13 闭环完成，转 Batch 14。**
 
+### Batch 14：C 端微信自助预约（学员自助预约 / 桥接 app_user→brand_learner_profile）⏳ 进行中
+
+交接 prompt：[pds/batches/batch-14-handoff.md](batches/batch-14-handoff.md)
+
+**第一个 C 端批**（api-app :8082 + app 前端 :3003）：把已建好的 booking/entitlement/waitlist 域（brand 侧 13a–13e）暴露给学员自助。⚠️ **不是薄包装**——核心难点是 auth 桥接：C 端跑 legacy `app_users`，booking 域操作 `brand_learner_profiles`，两套并行身份 key on openid 但无 FK。
+
+grill + 拆批拍板（2026-06-25 会话内，4 决策点，**均推荐项**）：
+- **① Auth 桥接**：登录 find-or-create `learner_identity`(by openid)+`brand_learner_profile`(by brand+identity)，`brand_learner_profile_id` 入 JWT payload（合 §7.1）。沿用 dev 占位 openid `"dev_"+code`，真实 WeChat `code2session`/手机号绑定 → FR；app_user 双轨并存。
+- **② 服务形态**：新 app 侧 `LearnerBookingService` 复用 **RBAC-free repo**（brand `booking.Service` 把 RBAC 焊在 service 层、repo 层干净）；ownership 校验替 RBAC，mode=auto/source=`learner_self_service`/scope=nil；镜像 13d `{db,bk}` 同事务复用。
+- **③ 范围/拆批**：拆 **14a 核心环**（桥接+课程表+自助预约+我的预约+自助取消+权益预览，证桥接闭环）+ **14b 增量**（我的权益+上课记录+加入候补）；订阅消息/真实微信/app_users 退役/候补转正 → FR。
+- **④ §22.1 时间冲突**：学员路径加跨场次 `[starts,ends)` 重叠校验（§22.1「同一时间已有预约」13c 缺失）；只加在 learner 路径（不动共享 `placeBooking`，staff 代预约可故意双约）。
+- **关键 schema 发现（全批零 migration，dev DB 保持 v12）**：`bookings.source` 已含 `learner_self_service`、`cancel_source` 已含 `learner`、`operation_logs.actor_type` CHECK 已含 `'learner'`（仅补 Go `audit.ActorLearner` 枚举）；`brand_learner_profiles` partial unique(000010) 使 find-or-create 幂等；JWT 加 `profile_id` claim 无状态。
+- **复用 `placeBooking` 的 3 摩擦点**：①`assisted_by` 无条件赋值且 **FK→brand_users**（自助须传 NULL，塞 learner id 会 23503）→ 参数化 `assistedBy *int64`；②审计焊死 `ActorBrandUser` → 补 `ActorLearner`；③`Cancel` 无所有权参数 + 焊死 `CancelSourceStaff` → 新 learner 取消路径加 tx 内 ownership + `cancel_source=learner`。改后复跑 13c–13e 全 DB 单测证零回归。
+- **桥接副作用**：13a 的 identity FoC 是 **by-phone**（要求 phone），桥接需**新增 by-openid 路径**；同人 brand 侧 by-phone 建档与 C 端 by-openid 登录是两个 profile，v1 不合并 → 验收须「学员先 C 端登录建 profile P，brand 再给 P 发权益」。
+
+#### Batch 14a：自助预约核心环（桥接 + 课程表 + 下单 + 我的预约 + 取消）✅
+
+详细契约：[pds/batches/batch-14a-self-booking.md](batches/batch-14a-self-booking.md)
+测试场景：[pds/batches/batch-14a-self-booking-tests.md](batches/batch-14a-self-booking-tests.md)
+验收 prompt：[pds/batches/batch-14a-acceptance-prompt.md](batches/batch-14a-acceptance-prompt.md)
+
+**2026-06-25 冒烟验收通过（主线程自测 API+psql+chrome-devtools 浏览器全流程全过）。全批零 migration（dev DB v12）、零权限码。**
+
+完成内容：
+- 后端（`dev`）：JWT `profile_id` claim + `audit.ActorLearner`（DB CHECK 已含 'learner'，纯 Go）；`placeBooking`/`applyCancel`/`settleHoldOnCancel` 参数化 `actor→*int64`（assisted_by/cancelled_by/operated_by 均 brand_users FK，学员传 NULL 避 23503，staff 行为不变）；桥接 `FindOrCreateProfileByOpenID`（by-openid、phone-less、幂等、quota 门、audit=learner，区别于 13a by-phone）；`CreateByLearner`（auto/source=learner_self_service/§22.1 跨场次重叠校验 hasOverlappingBooking + 锁 profile 行串行化并发）+ `CancelByLearner`（tx 内 ownership + cancel_source=learner）；新域 `application/learnerbooking`（无 RBAC，profile 收口，复用 RBAC-free repo，课程表复用 classsession repo.List）；app endpoints `/api/v1/app`(GET class-sessions[+:id]/POST bookings/GET bookings/GET usable-entitlements/POST bookings/:id/cancel) + wechatLogin 串桥接 + middleware GetProfileID + wire。新错误码 `BOOKING_TIME_CONFLICT`。**`go build ./... && go test ./...` 全绿（60 包），13c/13d/13e 零回归。**
+- 前端（`dev`）：`packages/api/app.ts` C 端 hooks + 类型(id 用 number 对齐后端 int64) + `appBookingErrorText` 学员友好失败文案；`/class-sessions`（场次卡片 + 预约确认弹窗 §5.7 权益预览 + 失败文案）+ `/bookings`（状态筛选 + 自助取消 ConfirmDialog）+ 底部导航对齐 §14.4。**prod build exit 0。**
+
+Post-impl code-review（2 并行 agent）→ 3 项当批修：后端 P1 并发自助下单 TOCTOU（锁 profile 行）；前端 P0 App* id `string→number`（后端 int64 序列化为 JSON number）；前端 P1 补 2 权益错误码。
+
+冒烟（主线程自测，= 业务验收）暴露并修 **3 个 C 端 greenfield 既有阻断**（桥接前 C 端从未端到端跑过）：① `app_users.vip_level` 列 tag 缺失 → 新用户登录 INSERT 42703；② app router 无 CORS（brand/admin 都有）→ 浏览器跨域被拦；③ 登录 `brand_id` 发 string → 后端 int64 bind 失败。另：api-app 启动需 `CONFIG_PATH=configs/config-app.yaml`（默认 config.yaml 跑成 :8081）。
+
+桥接核心锚点验证（psql 实查）：C 端 `dev_alice`→identity→profile 14，自助 booking `source=learner_self_service`/`assisted_by` NULL/`audit actor=learner`，与 brand 侧 /bookings 同一 profile；ownership(bob 取消 alice→404)、无权益、时间冲突、取消(cancel_source=learner/hold released) 全过。浏览器全流程（登录→课程表→预约确认弹窗→预约成功→我的预约→取消）通过。
+
+转 FR（见三库 `.learnings`）：真实 WeChat code2session + 手机号绑定；同人 by-phone↔by-openid identity 合并；app_users 退役；并发首登 savepoint；硬导航水合门；订阅消息。**下一子批：14b 我的权益 + 上课记录 + 加入候补。**
+
 ## 6. 验收命令
 
 后端：

@@ -290,3 +290,9 @@ grill 画出 TX-1 下单 / TX-2 代取消 / TX-3 场次取消级联三事务的 
 
 ### 撤销误签到用状态机天然替代（pending_no_show→attended）
 签到接受 pending_no_show（结束场次后补签）即天然纠错，免做 undo（§20.12 撤销留人工）。决策时优先找状态机已有路径替代新功能。
+
+## 2026-06-25 Batch 14a — C 端首批，桥接是真难点（非薄包装）
+- 拆批正确：14a 核心环(桥接+课程表+下单+我的预约+取消) 隔离高风险桥接单独验收，14b(权益/上课记录/候补)纯增量。
+- grill 透了三难点(auth 桥接 / 无 RBAC 服务路径 / 复用 placeBooking 事务边界)→ 零返工：契约预判的 assisted_by FK→NULL、actor 参数化、ownership tx 内校验、§22.1 重叠+并发锁，全部落地即对；code-review 仅 1 P1(并发 TOCTOU)+1 P0(前端 id 类型)。
+- **冒烟即验收**（主线程自测 API+psql+chrome-devtools 浏览器）暴露 3 个 C 端 greenfield 既有阻断（app_users.vip_level 42703 / app router 无 CORS / 登录 brand_id 发 string）——「从未端到端跑过的端」单测+build 全绿也会崩，验收必须真起服务跑通浏览器。
+- 全批零 migration（bookings.source/cancel_source/operation_logs.actor_type CHECK 000003 已含 learner_self_service/learner/'learner'；JWT 无状态）。早期 PROGRESS「source=learner_self_service 薄包装」的乐观假设被 grill 推翻——真难点是两套并行身份(app_users vs learner_identities)桥接。
