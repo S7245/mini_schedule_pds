@@ -672,7 +672,31 @@ Post-impl code-review（2 并行 agent）→ 3 项当批修：后端 P1 并发�
 
 Code-review（2 并行 agent）+ 冒烟（API+psql+浏览器）**零 P0/P1、零新缺陷**——14a 已修的 3 个 C 端 greenfield 阻断打好地基，14b 纯增量直接跑通，印证 14a/14b 拆批正确。转 FR（3 项 P2，见 `.learnings`）：CancelByLearner 复用 WAITLIST_NOT_PROMOTABLE 码；ListMyBookings status 无 allowlist；共享 mutation isPending 禁整列按钮 + 候补模式多余 bookings 拉取。
 
-桥接锚点验证（psql）：加入候补 `operated_by` NULL + audit actor=learner + position；ownership(bob 取消 alice 候补→404)；§22.4 候补不锁权益(bob 无权益可加入)；取消候补落库 cancelled+NULL。浏览器全流程（我的 hub→我的权益→上课记录→课程表加入候补→候补中→取消候补）通过。**Batch 14（C 端微信自助预约）14a+14b 全闭环。** 下一批待定（候补转正 C 端/订阅消息/真实微信 等留 FR）。
+桥接锚点验证（psql）：加入候补 `operated_by` NULL + audit actor=learner + position；ownership(bob 取消 alice 候补→404)；§22.4 候补不锁权益(bob 无权益可加入)；取消候补落库 cancelled+NULL。浏览器全流程（我的 hub→我的权益→上课记录→课程表加入候补→候补中→取消候补）通过。**Batch 14（C 端微信自助预约）14a+14b 全闭环。**
+
+### Batch 15：场次状态自动化（asynq 定时任务框架接入）✅
+
+交接 prompt：[pds/batches/batch-15-handoff.md](batches/batch-15-handoff.md)
+详细契约：[pds/batches/batch-15-session-automation.md](batches/batch-15-session-automation.md)
+测试场景：[pds/batches/batch-15-session-automation-tests.md](batches/batch-15-session-automation-tests.md)
+
+**2026-06-26 主线程 live 验收通过（起 worker + 造过去 ends_at 数据 + psql 实查全过）。后端为主、零前端、零 migration（dev DB 保持 v12）。** 「3 批后端/品牌端收尾」第 1 批。asynq 作为后期定时自动化框架的首个落点。
+
+brainstorm（brainstorming skill）+ grill + AskUserQuestion 拍板（4 决策点**全取推荐项**）：①范围=框架+自动 `scheduled→in_progress`(显示态)+自动结束场次(→completed+产 pending_no_show)，自动爽约扣课**排除**(§22.6 硬约束)②worker=独立 `cmd/worker`+Railway 第 4 服务 replicas=1(Scheduler 单例)③periodic 扫描批量④零 migration(Full/Closed 读时算 + asynq 全存 Redis)。
+
+完成内容：
+- 后端（`dev`，5 commits `edd461e..0665289`）：引入 `hibiken/asynq v0.26.0` + `config.WorkerConfig`(sweep_cron/concurrency)；**抽 `applyEndSession(tx,sess,actor)` 核心**——13e `EndSession`(brand_user) 与新 `EndSessionSystem`(system) 共用，**actor 参数化**（镜像 14a；system 路径 audit actor_type=system/actor_id NULL，无 brand_users FK）；新扫描方法 `MarkSessionsInProgress(now)`(批量 scheduled→in_progress，纯显示态无 audit)/`ListDueSessionIDs(now)`(跨品牌到点未结束)；新 `application/sessionautomation.Service.RunSweep(now)`(无 RBAC，先 mark 后逐场次 EndSystem，失败隔离+幂等)；`interfaces/worker.SweepHandler`(asynq 入站) + `cmd/worker`(手动 DI + Scheduler/Server + 优雅退出)。`now` 参数化时钟可控；worker 不跑 migration。
+- 前端：**零改动**——`/schedule` 已内置 `in_progress`「进行中」绿徽标 + 筛选（13e 预置），自动化产出的状态 UI 直接渲染。
+
+Post-impl code-review（3 finder agent）→ 3 项当批修（commit `0665289`）：
+- **F1（行为回归）**：场次自动转 in_progress 后，booking `Create`/`CreateByLearner` 与 waitlist `Join`/`Promote` 的 `status != scheduled` 守卫会阻断预约/转正（尤其 **Promote 不过时间窗**→「课已开始、有人腾位、转正候补者」工作流被悄悄阻断）。放宽 4 处守卫为 `NOT IN (scheduled,in_progress)`——**in_progress 视同 scheduled**，下单仍由时间窗、转正仍由容量把关，保留 Batch 15 前行为。加回归测试 `TestWaitlist_PromoteIntoInProgress`。
+- F2：`RunSweep` 把 List→End 间被删场次(`ErrSessionNotFound`)按 skipped 计而非 failed（良性竞态不刷 error 日志）。
+- F4：`cmd/worker` scheduler.Start 失败时先 `srv.Shutdown` 再退出。
+- F3 转 FR：`ListDueSessionIDs` 缺 `(status,ends_at)` 覆盖索引（零 migration 决策；v1 规模 seqscan 可忽略，session 表增长后补 partial index）。
+
+验收（live 主线程自测 = 业务验收）：起 `cmd/worker`(MINI_SCHEDULE_WORKER_SWEEP_CRON=@every 5s) → 造场次 A(过去 starts/未来 ends)+B(过去 ends+1 booked 未签到) → 一轮 sweep 后 psql 实查：A=`in_progress`、B=`completed`、B 的 booking=`pending_no_show`（**非** no_show，§22.6）、`session_ended` audit `actor_type=system`/`actor_id` NULL、booked_count 不变、in_progress 转换 0 audit；**幂等**：worker 连跑 8 轮仅 1 条 audit（已转场次不再现身扫描）。`go build/test ./...` 34 包绿，13c/13d/13e/14a 零回归。
+
+下一批待定（Batch 16/17 后端/品牌端收尾；候补转正 C 端/订阅消息/真实微信/subscription 自动 grace-expiry 等留 FR）。
 
 ## 6. 验收命令
 

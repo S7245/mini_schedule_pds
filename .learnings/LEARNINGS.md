@@ -302,3 +302,10 @@ grill 画出 TX-1 下单 / TX-2 代取消 / TX-3 场次取消级联三事务的 
 - code-review(2 路) + 冒烟(API+psql+浏览器) **零 P0/P1、零新 bug**——印证拆批正确：14a 把高风险 auth 桥接 + 3 个 C 端 greenfield 阻断扛掉并单独验收，14b 在稳地基上直接跑通。
 - 全批零 migration / 零新权限码 / 零新错误码（候补复用 13d WAITLIST_*；多状态 filter 是纯查询；audit learner CHECK 已允许）。
 - 复用范式：waitlist 学员路径 = 参数化 Join(SelfService) 镜像 14a placeBooking actor→nil；上课记录 = ListFilter.Statuses 多状态，单端点 GET /bookings 两用（status 逗号 split）。
+
+## 2026-06-26 Batch 15 — 场次状态自动化（asynq 接入）流程经验
+
+- **memory 指令的「先 brainstorm 再定」要照做**：memory `asynq-cron-adoption` 明令「真正接入 asynq 时先用 brainstorming skill 做针对性 brainstorm，不要照搬预案」。照做流程：brainstorm（brainstorming skill）→ grill 设计树 → AskUserQuestion 拍板（4 决策点全推荐项）→ 写契约 → 会话内 approve → 测试场景 → 主线程逐 task TDD → /code-review → live 主线程验收 → PROGRESS/.learnings → push。brainstorming skill 的默认终态（写 docs/superpowers/specs + writing-plans）被本项目 handoff 约定覆盖（契约写 pds/batches/、AskUserQuestion 拍板、主线程 TDD），但其**纪律**（先想清范围再写代码）正是要点。
+- **brainstorm 能挖出 handoff 预案的隐藏假设，但要审计旁路**：brainstorm 验证了「auto-in_progress 安全」靠 booking 时间窗在 starts_at 前已关闭——但**漏了 waitlist Promote 不过时间窗**，code-review F1 才抓到。教训：声称「纯显示态/零行为变更」时，必须把所有把该状态当门的守卫（含跳过常规校验的旁路如 promote）逐一审计，不能只验「主路径」。
+- **live 主线程验收 = 业务验收**（13a–14b 惯例，不发邮件）：起真 worker + 造「过去 ends_at」数据（免等墙钟）+ psql 实查，比纯 API 烟测更能证「worker 框架端到端真跑」（asynq Scheduler enqueue + Server 消费 + 幂等）。本批 live 验收抓到的不是 bug 而是正面印证（幂等：连跑 8 轮仅 1 audit）。
+- **零 migration / 零前端再现**：本批是连续第 N 个零 migration 批（in_progress 已在 000003 CHECK 内、Full/Closed 读时算、asynq 全存 Redis）+ 零前端（/schedule 13e 预置 in_progress 徽标）。规律：起飞前 grep 确认「枚举值是否已在 CHECK + UI 是否已铺全枚举」，常能省掉 migration/前端 task。
