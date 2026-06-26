@@ -658,6 +658,22 @@ Post-impl code-review（2 并行 agent）→ 3 项当批修：后端 P1 并发�
 
 转 FR（见三库 `.learnings`）：真实 WeChat code2session + 手机号绑定；同人 by-phone↔by-openid identity 合并；app_users 退役；并发首登 savepoint；硬导航水合门；订阅消息。**下一子批：14b 我的权益 + 上课记录 + 加入候补。**
 
+#### Batch 14b：自助增量（我的权益 + 上课记录 + 加入候补）✅
+
+详细契约：[pds/batches/batch-14b-self-extras.md](batches/batch-14b-self-extras.md)
+测试场景：[pds/batches/batch-14b-self-extras-tests.md](batches/batch-14b-self-extras-tests.md)
+验收 prompt：[pds/batches/batch-14b-acceptance-prompt.md](batches/batch-14b-acceptance-prompt.md)
+
+**2026-06-26 冒烟验收通过（主线程自测 API+psql+chrome-devtools 浏览器全流程全过）。全批零 migration、零新权限码、零新错误码。**
+
+完成内容：
+- 后端（`dev`，6 commits `fda1503..f1fe40a`）：booking `ListFilter.Statuses []string`（多状态 IN，上课记录；单 Status 路径不变，brand 零回归）；**waitlist 学员路径**——`Join` 参数化 `SelfService`（operated_by NULL[brand_users FK，FK-NULL 模式第 4 落点] + audit actor=learner + scope nil；staff 不变）+ `writeWaitlistLogAs`，新 `ListByLearner`（我的候补）+ `CancelByLearner`（tx 内 ownership，越权 WAITLIST_ENTRY_NOT_FOUND；baseQuery 加 location_name）；`learnerbooking.Service` 聚合 entitlement+waitlist repo——`ListMyEntitlements`（复用 RBAC-free settle-on-read）/`JoinWaitlist`/`ListMyWaitlist`/`CancelMyWaitlist`，`ListMyBookings` 的 status 逗号 split→Statuses（GET /bookings 一端两用）；app endpoints + wire。**`go test ./...` 60 包绿，13c/13d/13e 零回归。**
+- 前端（`dev`，4 commits `060762c..03df97a`）：app api 模块（`useAppEntitlements`[key app-entitlements]/`useAppWaitlist`/`useAppJoinWaitlist`/`useAppCancelWaitlist` + 类型 id number + WAITLIST_* 文案）；「我的」hub 入口 + 我的权益页 + 上课记录页（复用 useAppBookings('attended,no_show')）+ 课程表满员→加入候补 + 我的预约「候补中」筛选/取消候补。**prod build exit 0。**
+
+Code-review（2 并行 agent）+ 冒烟（API+psql+浏览器）**零 P0/P1、零新缺陷**——14a 已修的 3 个 C 端 greenfield 阻断打好地基，14b 纯增量直接跑通，印证 14a/14b 拆批正确。转 FR（3 项 P2，见 `.learnings`）：CancelByLearner 复用 WAITLIST_NOT_PROMOTABLE 码；ListMyBookings status 无 allowlist；共享 mutation isPending 禁整列按钮 + 候补模式多余 bookings 拉取。
+
+桥接锚点验证（psql）：加入候补 `operated_by` NULL + audit actor=learner + position；ownership(bob 取消 alice 候补→404)；§22.4 候补不锁权益(bob 无权益可加入)；取消候补落库 cancelled+NULL。浏览器全流程（我的 hub→我的权益→上课记录→课程表加入候补→候补中→取消候补）通过。**Batch 14（C 端微信自助预约）14a+14b 全闭环。** 下一批待定（候补转正 C 端/订阅消息/真实微信 等留 FR）。
+
 ## 6. 验收命令
 
 后端：

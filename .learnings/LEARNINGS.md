@@ -296,3 +296,9 @@ grill 画出 TX-1 下单 / TX-2 代取消 / TX-3 场次取消级联三事务的 
 - grill 透了三难点(auth 桥接 / 无 RBAC 服务路径 / 复用 placeBooking 事务边界)→ 零返工：契约预判的 assisted_by FK→NULL、actor 参数化、ownership tx 内校验、§22.1 重叠+并发锁，全部落地即对；code-review 仅 1 P1(并发 TOCTOU)+1 P0(前端 id 类型)。
 - **冒烟即验收**（主线程自测 API+psql+chrome-devtools 浏览器）暴露 3 个 C 端 greenfield 既有阻断（app_users.vip_level 42703 / app router 无 CORS / 登录 brand_id 发 string）——「从未端到端跑过的端」单测+build 全绿也会崩，验收必须真起服务跑通浏览器。
 - 全批零 migration（bookings.source/cancel_source/operation_logs.actor_type CHECK 000003 已含 learner_self_service/learner/'learner'；JWT 无状态）。早期 PROGRESS「source=learner_self_service 薄包装」的乐观假设被 grill 推翻——真难点是两套并行身份(app_users vs learner_identities)桥接。
+
+## 2026-06-26 Batch 14b — 增量批，零新缺陷（验证 14a/14b 拆批）
+- 14b(我的权益+上课记录+加入候补) 是纯增量：learnerbooking 聚合服务 + app endpoint + app 页，复用 14a 已验证模式（ownership 收口、FK-NULL+audit learner、id number、app-entitlements 失效预埋）。
+- code-review(2 路) + 冒烟(API+psql+浏览器) **零 P0/P1、零新 bug**——印证拆批正确：14a 把高风险 auth 桥接 + 3 个 C 端 greenfield 阻断扛掉并单独验收，14b 在稳地基上直接跑通。
+- 全批零 migration / 零新权限码 / 零新错误码（候补复用 13d WAITLIST_*；多状态 filter 是纯查询；audit learner CHECK 已允许）。
+- 复用范式：waitlist 学员路径 = 参数化 Join(SelfService) 镜像 14a placeBooking actor→nil；上课记录 = ListFilter.Statuses 多状态，单端点 GET /bookings 两用（status 逗号 split）。
