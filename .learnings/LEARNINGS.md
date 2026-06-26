@@ -309,3 +309,10 @@ grill 画出 TX-1 下单 / TX-2 代取消 / TX-3 场次取消级联三事务的 
 - **brainstorm 能挖出 handoff 预案的隐藏假设，但要审计旁路**：brainstorm 验证了「auto-in_progress 安全」靠 booking 时间窗在 starts_at 前已关闭——但**漏了 waitlist Promote 不过时间窗**，code-review F1 才抓到。教训：声称「纯显示态/零行为变更」时，必须把所有把该状态当门的守卫（含跳过常规校验的旁路如 promote）逐一审计，不能只验「主路径」。
 - **live 主线程验收 = 业务验收**（13a–14b 惯例，不发邮件）：起真 worker + 造「过去 ends_at」数据（免等墙钟）+ psql 实查，比纯 API 烟测更能证「worker 框架端到端真跑」（asynq Scheduler enqueue + Server 消费 + 幂等）。本批 live 验收抓到的不是 bug 而是正面印证（幂等：连跑 8 轮仅 1 audit）。
 - **零 migration / 零前端再现**：本批是连续第 N 个零 migration 批（in_progress 已在 000003 CHECK 内、Full/Closed 读时算、asynq 全存 Redis）+ 零前端（/schedule 13e 预置 in_progress 徽标）。规律：起飞前 grep 确认「枚举值是否已在 CHECK + UI 是否已铺全枚举」，常能省掉 migration/前端 task。
+
+## 2026-06-27 Batch 16 — 订阅生命周期自动化（asynq 第 2 task）流程经验
+
+- **handoff 驱动的跨 session 执行干净跑通**：上一 session 已 grill+AskUserQuestion 拍板+写契约，本 session handoff 明令「不重新 grill/不重写契约/不重开 AskUserQuestion，会话内 approve→逐 task TDD→验收→push」。契约即 source of truth（4 决策点全锁定），新 session 只需：读契约→简述请会话内 approve→按「逐 task TDD 顺序」开工。证明「契约文件 + impl-handoff」是可靠的 session 边界交接物，省掉重复设计。
+- **零 migration/零前端/零新错误码再现（连续第 N 批）**：起飞前已核实 000003 的 CHECK 含 6 态全 + grace_ends_at 列 + 索引就绪 → dev DB 保持 v12；转换守卫用 `(bool,error)` 良性 skip 免新错误码；admin summary 自动受益免前端。规律稳定：grep 确认枚举/列/索引就绪常省掉 migration。
+- **「3 批后端/品牌端收尾」第 2 批复用前批基建**：Batch 15 落 asynq worker，Batch 16 直接加第 2 periodic task（同进程/同 Server/同 Scheduler），印证「先落框架批、再落复用批」的切分让后续自动化成本极低。
+- **code-review high(8 finder) 价值在区分「真 bug vs 设计内 vs FR」**：本批 0 correctness bug，finder 报的「expiry 边界 gap」「graceDays=0」「多 sub 同品牌」均被设计/唯一索引/契约证伪；真正有价值的是「手动 →grace_period 留 stale grace_ends_at」（manual 旁路边界，转 FR 并警示未来 restricted→expired 自动化）。教训：finder 要 recall-biased 多报，但 verify/主线程要用领域知识（唯一索引、契约决策）冷静证伪，不被「貌似合理」带跑。

@@ -698,6 +698,28 @@ Post-impl code-review（3 finder agent）→ 3 项当批修（commit `0665289`�
 
 下一批待定（Batch 16/17 后端/品牌端收尾；候补转正 C 端/订阅消息/真实微信/subscription 自动 grace-expiry 等留 FR）。
 
+### Batch 16：订阅生命周期自动化（BrandSubscription 自动 grace/restricted，复用 asynq worker）✅
+
+交接 prompt：[pds/batches/batch-16-impl-handoff.md](batches/batch-16-impl-handoff.md)
+详细契约：[pds/batches/batch-16-subscription-lifecycle.md](batches/batch-16-subscription-lifecycle.md)
+
+**2026-06-27 主线程 live 验收通过（起 worker + 造过去 expires_at/grace_ends_at 数据 + psql 实查全过）。后端为主、零前端、零 migration（dev DB 保持 v12）、零新权限码、零新错误码。** 「3 批后端/品牌端收尾」第 2 批，复用 Batch 15 asynq worker（同进程加第 2 条 periodic task）。补 `GO_BACKEND_LANGUAGE_DESIGN.md §11` 明列的「BrandSubscription 自动进 GracePeriod/Restricted 定时任务」缺口。
+
+grill 设计树（难点 A status 门审计 / B 状态机+grace_ends_at / C 复用 worker / D 续期拉回）+ AskUserQuestion 拍板（4 决策点**全取推荐项**）：①范围=仅 `active→grace_period→restricted` 自动化，`restricted`=终态（expired/cancelled 留人工，自动 restricted→expired 留 FR）②执行面=仅放宽现有 `SubscriptionGuard`（§4.5 对新预约/场次/权益的订阅门=pre-existing 缺口留 FR）③`grace_ends_at = expires_at + worker.grace_days`（默认 7，env 覆盖）④零 FE（admin summary 自动转准；brand banner 留 FR）。
+
+完成内容（后端 `dev`，5 commits `6e3b7f5..28a776e`）：
+- **放宽 `SubscriptionGuard.CheckAndCount`**（唯一执行面改动）：资源供给门 `status='active'` → `status IN ('active','grace_period')`，宽限期品牌仍可加 Location/Staff/Learner；时间门 `(grace_ends_at>now OR (grace_ends_at IS NULL AND expires_at>now))` 不变，保留 active+已过期读时硬限（纵深防御）。门审计已穷尽：该点是唯一把订阅 status 当资源门的位置（class_session/entitlement/booking repo 不查订阅 status）。
+- **`commercial.Repository` +4 法**（domain 接口 + 实现）：两段 list（`ListSubscriptionsDueForGrace`/`ListSubscriptionsDueForRestricted`）+ 两段逐 sub 系统事务转换（`TransitionSubscriptionToGrace`/`TransitionSubscriptionToRestricted`），抽 **`applySubscriptionTransition` 公共骨架**（镜像 13e/15 `applyEndSession`：按 id 锁行、无 brand 过滤、锁后状态守卫=幂等+并发安全、audit actor=system/actor_id NULL、守卫不过返 `(false,nil)` 良性 skip）。
+- 新 `application/subscriptionlifecycle.Service.RunSweep(now)`（无 RBAC，镜像 sessionautomation）：phase1 整体先于 phase2 → 长期过期 sub 一轮 `active→grace→restricted` 自愈；systemic(List 出错)返 error 触发重试，单 sub 失败 log+continue。`Summary{Graced,Restricted,Skipped,Failed}`。
+- `interfaces/worker.SubscriptionSweepHandler`（asynq 入站）+ `config.WorkerConfig.{SubscriptionSweepCron,GraceDays}` + keysToBind + 4 yaml worker 段 + `cmd/worker` 手动 DI 第 2 service+handler+Scheduler entry（同一 asynq Server/mux 消费两类任务，replicas=1 铁律不变）。
+- 前端：**零改动**（admin dashboard summary 自动受益：restricted 计数从恒≈0 转准；grace 可按 status 筛）。
+
+Post-impl code-review（high，8 finder angle + verify）→ **无 correctness bug**，2 项当批 cleanup（commit `28a776e`）：抽 `applySubscriptionTransition` 公共骨架消除两转换法 ~95% 重复；导出 `subscriptionlifecycle.DefaultGraceDays`，`cmd/worker` 引用它而非字面量 7（单一真源）。其余转 FR（见 backend `.learnings`）：手动 `UpdateBrandSubscriptionStatus→grace_period` 留 stale/NULL grace_ends_at（放宽 guard 后「宽限不结束」+ 未来 restricted→expired 自动化误扫警告）；grace_period 未入 admin summary 任何桶；「可用订阅 status 集」在 guard/summary 散为 SQL 字面量宜集中。
+
+验收（live 主线程自测 = 业务验收）：起 `cmd/worker`(MINI_SCHEDULE_WORKER_SUBSCRIPTION_SWEEP_CRON=@every 5s, GRACE_DAYS=7) 连 dev DB v12 + Redis → 造 3 隔离测试品牌（active -30d / active -1d / frozen -30d）→ 一轮 sweep：**graced=2 restricted=1**；psql 实查 A=`restricted`（一轮自愈）、B=`grace_period`（grace_ends_at=+6d 未来，宽限窗真实有效）、C=`frozen` 不动、既有真实 sub(brand21,未来到期)不碰；audit `actor_type=system`/`actor_id` NULL；**幂等**：连跑 18 轮后续全 `graced=0 restricted=0`、无新 audit。验毕清空测试数据（dev DB 复原 v12）。guard 六态走查 + 续期拉回由真实 PG 自动化单测覆盖。`go build/test ./...` 35 包绿，13c/13d/13e/14a/15 + Batch 4/5/13a 配额零回归。
+
+下一批待定（订阅自动 restricted→expired、§4.5 受限态对新预约/场次/权益的订阅门、支付异常人工补偿、brand 受限/续费 banner、到期前提醒通知 等留 FR）。
+
 ## 6. 验收命令
 
 后端：
