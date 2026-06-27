@@ -316,3 +316,9 @@ grill 画出 TX-1 下单 / TX-2 代取消 / TX-3 场次取消级联三事务的 
 - **零 migration/零前端/零新错误码再现（连续第 N 批）**：起飞前已核实 000003 的 CHECK 含 6 态全 + grace_ends_at 列 + 索引就绪 → dev DB 保持 v12；转换守卫用 `(bool,error)` 良性 skip 免新错误码；admin summary 自动受益免前端。规律稳定：grep 确认枚举/列/索引就绪常省掉 migration。
 - **「3 批后端/品牌端收尾」第 2 批复用前批基建**：Batch 15 落 asynq worker，Batch 16 直接加第 2 periodic task（同进程/同 Server/同 Scheduler），印证「先落框架批、再落复用批」的切分让后续自动化成本极低。
 - **code-review high(8 finder) 价值在区分「真 bug vs 设计内 vs FR」**：本批 0 correctness bug，finder 报的「expiry 边界 gap」「graceDays=0」「多 sub 同品牌」均被设计/唯一索引/契约证伪；真正有价值的是「手动 →grace_period 留 stale grace_ends_at」（manual 旁路边界，转 FR 并警示未来 restricted→expired 自动化）。教训：finder 要 recall-biased 多报，但 verify/主线程要用领域知识（唯一索引、契约决策）冷静证伪，不被「貌似合理」带跑。
+
+## 2026-06-27 Batch 17 — 品牌运营看板（纯读聚合）流程经验
+
+- **早阶段 handoff（"只 grill 不写代码"）→ 主线程真做 grill + AskUserQuestion + 写契约**：与 Batch 16（已 grill+契约就绪只 approve+TDD）不同，Batch 17 handoff 是规划态（"第一步只做 grill 设计树 + 范围决策"）。主线程照做：读 §15 + 数据源代码核验每指标可算性（用 subagent 把 11 指标逐条映射到表/列/status，标出口径歧义）→ AskUserQuestion 4 决策点 → 写契约 → 会话内 approve → TDD。**起飞前核实 handoff 的"待核实"假设**：handoff 猜"大概率新增 report.view_basic from 000013"，实测 `grep report migrations/000003` 发现**已 seed**（owner/admin/course_operator/location_manager）→ 零 migration/零权限码。
+- **纯读批的真难点是口径不是技术**：聚合 SQL 不难，难在"上座率=到课/容量 vs 到课/预约""预约数含不含取消""待处理爽约是 live 还是窗内""每指标按哪个时间戳锚定"。这些 grill 时逐条定清写进契约（口径表），TDD 按表断言，免返工。subagent 逐表核验 + 标出歧义清单是高 ROI 的 grill 前置。
+- **live 验收靠 brand21 既有 e2e 残留数据 + psql 对账**：无需造数据，用 owner curl 真端点 + 独立 psql 同口径查比对（精确吻合）+ 换 instructor 验 403 门 + 换店长验 scope。read-only 不留痕。

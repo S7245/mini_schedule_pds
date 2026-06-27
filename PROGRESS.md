@@ -720,6 +720,25 @@ Post-impl code-review（high，8 finder angle + verify）→ **无 correctness b
 
 下一批待定（订阅自动 restricted→expired、§4.5 受限态对新预约/场次/权益的订阅门、支付异常人工补偿、brand 受限/续费 banner、到期前提醒通知 等留 FR）。
 
+### Batch 17：品牌基础运营看板（§15 品牌看板 11 指标，纯读聚合）✅
+
+详细契约：[pds/batches/batch-17-brand-report-dashboard.md](batches/batch-17-brand-report-dashboard.md)
+交接 prompt：[pds/batches/batch-17-handoff.md](batches/batch-17-handoff.md)
+
+**2026-06-27 主线程 live 验收通过（起 api-brand 连 dev DB + curl + psql 对账 + 权限/scope 实测）。后端聚合 + brand 一页前端、零 migration（dev DB 保持 v12）、零新权限码（report.view_basic 已 seed）、零新错误码。** 「后端/品牌端收尾」第 3 批（15 场次自动化 → 16 订阅自动化 → 17 报表 → 18 通知）。**纯读聚合批**，平台看板留 17b（admin GetPlatformSummary 已覆盖 ~5/9）。
+
+grill 设计树（数据源可算性逐条核验 / 聚合范式 / 范围 / 口径）+ AskUserQuestion 拍板（4 决策点**全取推荐项**）：①范围=仅品牌看板②§15 全 11 项③上座率=到课数/总容量(座位占用)④本批做店长本店 data_scope。
+
+完成内容（后端 `dev` 4 commits `232465d..8e58d5a`、web `dev` 2 commits）：
+- **后端**：新 `internal/domain/report`（ReportQuery+BrandOverview+Repository）+ `persistence/report_repository.go`（镜像 onboarding GetCounts，N 条聚合 SQL 一次出全 11 指标）：**A 组**锚定场次 starts_at 按 booking status 分类（预约/到课/取消/爽约一趟 FILTER + 上座率=到课(已完成场次)/SUM(已完成场次容量) + 热门课程 Top5 + Location 分布 LEFT JOIN 保留 0 预约场次 + Instructor 场次）；**B 组**锚定事件时间戳（权益锁定 held_at / 消耗 consumed_at）；**C 组** live 忽略窗（待处理爽约 / 候补）。data_scope 统一过滤 cs.location_id（location-less 表经 NOT NULL FK join 到 cs，nil=全品牌/空=全 0/单门店）。`application/report.Service`（report.view_basic 门 + scopeFilterIDs 镜像 13c + resolveWindow today/this_week(周一)/this_month/custom UTC）。`interfaces/brand/report_handler.go` + Wire（重生成 wire_gen.go）。
+- **前端**：brand `/reports` 运营看板页（时间窗 + 门店筛选 + 9 标量卡片 + 热门课程/门店分布/教练场次表，复用 Card/Table/Select，不引图表库）+ 报表导航入口 report.view_basic 门 + `packages/api/reports.ts` + types。
+
+Post-impl code-review（high，3 finder：后端 SQL 口径 / 后端 wire-scope / 前端）→ 后端**零 finding**（每指标对账契约、scope-join、权限门真实未旁路、wire 20 形参一致全经核验），前端 1 项当批修（`useBrandLocations` 加 enabled 形参，无 report.view_basic 直链 /reports 不再多打 /locations，commit `8e58d5a`）。
+
+验收（live 主线程自测）：起 api-brand 连 dev DB → owner(18816820405) curl `?range=custom&from=2026-01-01&to=2026-12-31` → **psql 对账精确吻合**（A 组 15/6/10/3、上座率 2/27、热门课程 courseA=14）；**权限门**：instructor(无 report.view_basic) → `PERMISSION_DENIED`；**data_scope**：店长 张三(13900139001) → OK 且 scoped 到 讯美广场（resolve assigned + 过滤正确）。验毕停测试进程（read-only 无数据改动）。`go build/test ./...` 36 包绿（+1 report）、零回归；`pnpm --filter brand build` 通过。
+
+下一批待定（17b 平台看板：套餐分布 + Location/席位/学员用量 + 本月收入；Batch 18 通知中心；其余 §15「第一版不做」留 FR）。
+
 ## 6. 验收命令
 
 后端：
