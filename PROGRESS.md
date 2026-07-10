@@ -1,8 +1,8 @@
 # 课程预约实现进度
 
-更新时间：2026-06-16
+更新时间：2026-07-10
 
-状态：平台商业化第一阶段进行中
+状态：平台商业化第一阶段进行中；「后端/品牌端收尾」15→18 全部完成（Batch 18 通知中心收官）
 
 ## 1. 当前阶段目标
 
@@ -738,6 +738,29 @@ Post-impl code-review（high，3 finder：后端 SQL 口径 / 后端 wire-scope 
 验收（live 主线程自测）：起 api-brand 连 dev DB → owner(18816820405) curl `?range=custom&from=2026-01-01&to=2026-12-31` → **psql 对账精确吻合**（A 组 15/6/10/3、上座率 2/27、热门课程 courseA=14）；**权限门**：instructor(无 report.view_basic) → `PERMISSION_DENIED`；**data_scope**：店长 张三(13900139001) → OK 且 scoped 到 讯美广场（resolve assigned + 过滤正确）。验毕停测试进程（read-only 无数据改动）。`go build/test ./...` 36 包绿（+1 report）、零回归；`pnpm --filter brand build` 通过。
 
 下一批待定（17b 平台看板：套餐分布 + Location/席位/学员用量 + 本月收入；Batch 18 通知中心；其余 §15「第一版不做」留 FR）。
+
+### Batch 18：员工/品牌后台站内通知中心（§20.13，channel=in_app）✅
+
+详细契约：[pds/batches/batch-18-notification-center.md](batches/batch-18-notification-center.md)
+交接 prompt：[pds/batches/batch-18-handoff.md](batches/batch-18-handoff.md)
+
+**2026-07-10 完成（grill → spec → plan → TDD 逐 task commit → 每 stage /code-review）。「后端/品牌端收尾」第 4 批（15 场次自动化 → 16 订阅自动化 → 17 报表 → 18 通知）。**
+
+grill 关键修正：交接假设「零通知系统 / 必建新表 000013」不成立——`notifications` 表在 **000003 已建**（per-user 收件箱形态：recipient_user_type/recipient_id/channel/status/read_at/related_*），migration 面显著缩小为「仅 seed 权限码」。4 决策点会话内 AskUserQuestion 拍板全取推荐：①事件范围 = 仅预约域 5 类 ②集成 = 事务后 best-effort 异步 ③data_scope 本店过滤本批做 ④000013 仅 seed 权限码 + per-user 落行。
+
+完成内容（backend `dev` 8 commits + web `dev` 1 commit）：
+- **migration 000013**（T1）：seed `notification.view` / `notification.mark_read` + 映射全部 8 后台角色模板 + backfill 存量品牌（镜像 000009 三步），复用已存在 notifications 表；up/down DB 测试。
+- **domain/notification**（T2）：EventType 5 值枚举 + Repository / RecipientResolver / BrandUserLister 接口 + 权限码常量。
+- **persistence + resolver**（T3）：notifications 仓储（InsertMany/List/UnreadCount/MarkRead 幂等+越权拒绝/MarkAllRead）+ brandUserLister；RecipientResolver 复用 `rbac.Checker`（owner fast-path + 缓存），按 notification.view + data_scope 覆盖 location fan-out，排除 actor，品牌级事件仅 all_brand。
+- **Emitter + 5 触点**（T4a/b/c）：事务后 best-effort（EmitAsync 在 `context.WithoutCancel` 上异步、失败仅记日志、nil-safe）。触点 = brand handler（预约创建/取消、候补 join/promote/skip/cancel、场次取消、endSession 待爽约）+ app handler（学员自助 预约/取消/候补，actor=0）+ worker sweep（系统自动结束场次的待爽约）。EmitInput 映射集中在 `application/notification/inputs.go` 两端复用；EndSessionResult 补 brand_id/location_id。
+- **brand 读端点 + Wire**（T5）：ReadService（notification.view/mark_read 门 + recipient=当前 brand_user）+ NotificationHandler 4 端点（GET /notifications、/unread-count、POST /:id/read、/read-all）+ Wire（brand/app cmd 补通知 providers，PermResolver/PermissionChecker 绑定 *rbac.Checker）。
+- **前端**（Stage B）：`packages/api/notifications.ts`（list/unread/mark hooks，未读轮询 30s）+ brand `/notifications` 页（全部/未读/已读筛选 + 列表 + 单条/全部已读，notification.view 门）+ 顶栏铃铛改指 /notifications + 真实未读徽标（替换原 mock）+ nav「消息中心」→「通知消息」。
+
+Post-impl code-review（high，inline）：后端**零 correctness bug**（全链路核验 emit 实体经 GetByID reload denorm→location 正确、GORM session 复用安全、MarkRead 越权→NOT_FOUND、migration 幂等）；4 项 FR/cleanup（见各仓库 FEATURE_REQUESTS）。
+
+验收：`go test ./...` **38 包全绿零回归**（13c–16 sweep/booking/waitlist 全绿）；端到端集成测试 `TestEmitEndToEnd_*`（真实 DB：owner 收 location 事件、无角色 staff 不收、actor 排除）；`pnpm --filter brand build` 通过（/notifications 路由 4.54 kB）。
+
+下一批待定：学员端**微信订阅消息**（§7.5，卡 per-brand 小程序模板审核，留 FR）；商业化通知事件（订阅异常/额度预警，本批范围外）；见 FEATURE_REQUESTS（收件人解析单查询优化、通知 body UTC 时区、分页/load-more、废弃 mock /messages 页清理）。
 
 ## 6. 验收命令
 
