@@ -1,8 +1,8 @@
 # 课程预约实现进度
 
-更新时间：2026-07-10
+更新时间：2026-07-12
 
-状态：平台商业化第一阶段进行中；「后端/品牌端收尾」15→18 全部完成（Batch 18 通知中心收官）
+状态：平台商业化第一阶段进行中；「后端/品牌端收尾」15→18 完成，Batch 19（商业化通知事件 + Batch 18 FR 收尾）完成
 
 ## 1. 当前阶段目标
 
@@ -760,7 +760,31 @@ Post-impl code-review（high，inline）：后端**零 correctness bug**（全�
 
 验收：`go test ./...` **38 包全绿零回归**（13c–16 sweep/booking/waitlist 全绿）；端到端集成测试 `TestEmitEndToEnd_*`（真实 DB：owner 收 location 事件、无角色 staff 不收、actor 排除）；`pnpm --filter brand build` 通过（/notifications 路由 4.54 kB）。
 
-下一批待定：学员端**微信订阅消息**（§7.5，卡 per-brand 小程序模板审核，留 FR）；商业化通知事件（订阅异常/额度预警，本批范围外）；见 FEATURE_REQUESTS（收件人解析单查询优化、通知 body UTC 时区、分页/load-more、废弃 mock /messages 页清理）。
+下一批待定：学员端**微信订阅消息**（§7.5，卡 per-brand 小程序模板审核，留 FR）；商业化通知事件（订阅异常/额度预警）→ **已在 Batch 19 落地**；Batch 18 的 4 项 FR 小尾巴 → **已在 Batch 19 收尾一并解决**。
+
+### Batch 19：商业化通知事件扩展 + Batch 18 FR 收尾 ✅
+
+详细契约：[pds/batches/batch-19-commercial-notification-events.md](batches/batch-19-commercial-notification-events.md)
+
+**2026-07-12 完成（grill → spec → plan → TDD → 每 stage /code-review，会话内验收，不发邮件）。** 接 Batch 18 通知基建补 §20.13 剩余 2 类后台事件，复用 Emitter/Resolver/表/`/notifications` 页，**无 migration、无新页面**。
+
+grill 关键：两类事件 plumbing 成本差异大 → 2 决策点拍板全取推荐：①额度事件 = **创建被 QUOTA_EXCEEDED 拦截时** emit（零 usage plumbing）②订阅异常 = **仅进入 restricted** 时 emit。收件人 = 品牌级角色（locationID=nil，RecipientResolver 已支持）。
+
+完成内容（backend `dev` 5 commits + web `dev` 1 commit）：
+- **T1** domain：EventType 加 `quota_near_limit` / `subscription_abnormal` + DefaultTitle + inputs 构造器。
+- **T2** quota emit：location/staff/learner brand handler 注入 emitter，create 被 QUOTA_EXCEEDED 拦截时 emit（`isQuotaExceeded` 检测单测）；Wire。
+- **T3** subscription emit：`commercial.Repository.GetSubscriptionBrandID` + subscriptionlifecycle `Notifier` 接口 setter，RunSweep 转 restricted 后 emit；worker 两 sweep 复用同一 emitter。RunSweep emit 单测 + 16 sweep 零回归。
+- **Stage B**：`/notifications` 页事件标签补 2 条。
+
+Post-impl code-review（high，inline）零 correctness bug；2 项 FR（quota emit 无 dedup、learner restore 路径未覆盖）。
+
+**Batch 18 FR 小尾巴（4 项，本批一并收尾）**：
+- **Tail-1** worker rbac.Checker 从 nil-cache 改用 Redis 缓存（降级安全），sweep 内同品牌权限解析命中缓存，消除逐用户重复 DB 查询。
+- **Tail-2** 通知 body 场次时间 UTC → **Asia/Shanghai** 展示（tzdata 缺失兜底 +8），timeShort 单测。
+- **Tail-3** `/notifications` 加「加载更多」分页（page_size 递增）。
+- **Tail-4** 删除废弃 mock `/messages` 页 + `lib/message-center-data.ts`；**首页概览「未读/最近通知」接真实 notifications API**（替换 mock）；抽 `lib/notification-format` 共享事件标签/时间格式化。
+
+验收：`go test ./...` **38 包全绿零回归**；`pnpm --filter brand build` 通过（30 页，/messages 已移除）。
 
 ## 6. 验收命令
 
