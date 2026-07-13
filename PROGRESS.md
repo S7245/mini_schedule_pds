@@ -1,8 +1,8 @@
 # 课程预约实现进度
 
-更新时间：2026-07-12
+更新时间：2026-07-13
 
-状态：平台商业化第一阶段进行中；「后端/品牌端收尾」15→18 完成，Batch 19（商业化通知事件 + Batch 18 FR 收尾）完成
+状态：平台商业化第一阶段进行中；15→19 通知/自动化 + Batch 20 支付异常补偿 + Batch 21 订阅受限 banner 全部完成
 
 ## 1. 当前阶段目标
 
@@ -785,6 +785,27 @@ Post-impl code-review（high，inline）零 correctness bug；2 项 FR（quota e
 - **Tail-4** 删除废弃 mock `/messages` 页 + `lib/message-center-data.ts`；**首页概览「未读/最近通知」接真实 notifications API**（替换 mock）；抽 `lib/notification-format` 共享事件标签/时间格式化。
 
 验收：`go test ./...` **38 包全绿零回归**；`pnpm --filter brand build` 通过（30 页，/messages 已移除）。
+
+### Batch 20：支付异常人工补偿（平台 admin）✅
+
+详细契约：[pds/batches/batch-20-payment-compensation.md](batches/batch-20-payment-compensation.md)
+
+**2026-07-13 完成。** 补 admin 从**卡单**（pending_payment/exception，无订阅）开通订阅的缺口（`manualRenew` 只能续既有订阅）。
+- **T1** repo `CompensateSaaSPlanOrder`：锁单 + 状态守卫 + **锁 brand 行**串行化 + 品牌有效订阅守卫（已有 active/grace 拒绝引导续期）+ 建订阅快照 + 订单 paid + 激活 brand + audit(actor=platform_admin)。**与支付回调 happy-path 隔离**（零 payment-path 回归）。新增 `ORDER_NOT_FOUND`/`ORDER_NOT_COMPENSATABLE` 码。DB 测试（开通+幂等+3 守卫）。
+- **T2** service（reason 必填）+ admin `POST /saas-plan-orders/:id/compensate`。
+- **T3** admin payments 页订单表加「补偿开通」弹窗 + 状态筛选（异常/待支付/已支付）。
+- code-review：并发 double-sub race → 补 brand 行锁修复；amount-trust（人工核实，by-design）留 FR。activation 与 callback 重复约 40 行 → 统一留 FR。
+
+### Batch 21：订阅受限态前端闭环（brand banner + 到期提醒）✅
+
+详细契约：[pds/batches/batch-21-subscription-banner.md](batches/batch-21-subscription-banner.md)
+
+**2026-07-13 完成。** Batch 16 订阅自动化的前端反馈闭环。
+- **C1** brand `GET /subscription`（repo `GetLatestSubscriptionByBrand` 无订阅 nil,nil + service + handler + Wire）。DB 测试。
+- **C2** `SubscriptionBanner`（受保护布局顶部）：restricted/expired/frozen 红、grace_period 黄（宽限至 X）、active ≤7 天到期黄；自助续费未落地引导「联系平台续期」。
+- **C3** 生命周期 sweep 转 grace 时 emit `subscription_expiring`（新事件）；`emitRestricted` 泛化为 `emitSubscriptionEvent`。
+
+**下一批候选**（均**不卡外部资源**）：微信支付真实 RSA 接入（等商户号）；真微信小程序学员端；商业化通知 dedup；订阅自助续费（§17.3）。见 FEATURE_REQUESTS。
 
 ## 6. 验收命令
 
