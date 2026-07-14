@@ -449,3 +449,29 @@ Expected: 无未提交改动（除 `.next` 等已忽略产物）。
 **类型一致性**：`KeyValueStorage`/`AuthTokenStore`/`HttpClient`/`ApiEnvelope`/`HttpRequest` 在 ports.ts 定义、在 ports.test.ts 使用，签名一致；`notificationEventLabel`/`formatNotificationTime`/`NOTIFICATION_EVENT_LABELS` 在 notifications.ts 与其测试、及 brand 两个消费者中名称一致。
 
 **已知取舍（非缺陷，已在代码注释与蓝图风险表记录）**：`formatNotificationTime` 沿用 `toLocaleString` 以保证 Web 零回归；小程序 Intl 支持弱，留待 P1 (Taro) 真实验证时再决定是否改手写格式。
+
+---
+
+## 执行记录（2026-07-13，Subagent-Driven，每 task 独立 subagent + 主线程复核）
+
+| Task | Commit (web dev) | 验证 |
+|---|---|---|
+| 1 scaffold + Vitest | `9e64833` | smoke 1 test PASS |
+| 2 notifications 迁移 | `1239e4e` | 6 tests PASS（红→绿确认） |
+| 3 DI ports | `e9dc469` | 9 tests PASS + `tsc --noEmit` 干净 |
+| 4 brand 切换消费 | `6f930de` | grep 无残留引用；本地副本已删 |
+| 5 零回归验收 | —（纯验证） | core 9 tests 绿；brand build ✓(30 页含 /notifications /dashboard)；admin build ✓(13 页)；工作树干净 |
+| 审查修正 | 见下节 | ports 补 PATCH 后全绿 + tsc 干净 |
+
+## Fable 5 复盘审查（2026-07-13）
+
+**已修正（代码缺陷）**：`ports.ts` 的 `HttpRequest.method` 缺 `'PATCH'`——后端/web 客户端已大量使用 PATCH（订阅状态、套餐启停等），未来各端实现无法覆盖既有 API 面。已补一行并复验全绿。
+
+**对后续 plan 的方法论修正（沿用时注意）**：
+1. **type-only 模块的 TDD 判据**：Task 3 的「红」在运行时不成立——`import type` 被 esbuild 擦除、vitest 不做类型检查。纯接口任务的红/绿应以 `tsc --noEmit` 为判据（本次执行 agent 已正确处置；后续含纯类型的 task 直接把 tsc 写进步骤）。
+2. **时区脆弱断言**：`formatNotificationTime` 的 `toContain('13')` 依赖运行机时区（Asia/Shanghai 下稳定）。未来上 CI 时在 `vitest.config.ts` 加 `test.env.TZ = 'Asia/Shanghai'` 固定。
+3. **`smoke.test.ts` 已完成使命**（基建验证），下一个 core plan 顺手删除，不值得单独提交。
+4. **zod 未随 P0 引入**是正确的 YAGNI——本批无 schema 迁移；首个 schema 迁移的 plan 再加依赖。
+5. **根 `pnpm test` 已自动覆盖 core**：turbo 对无 build script 的包把 `dependsOn: build` 视为 no-op，core 的 vitest 正常纳入，无需额外接线。
+
+**升级到蓝图的事项**（已写入 spec §6 风险表 + §10 修订记录）：Tauri 加载模式定为远程 URL、`packages/api` web 耦合（sonner/localStorage）的演进路径、小程序/公众号登录后端前置、`HttpClient` 错误语义为 P1 spec 首个决策点、Taro/Expo 版本锚定、P2 收窄为 brand-only + 归档 electron 仓。

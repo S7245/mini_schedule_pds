@@ -52,7 +52,7 @@ Mini Schedule 需要覆盖多端：
 | 端 | 框架 | 现状 → 目标 |
 |---|---|---|
 | 商家 Web | **Next.js**（现有 brand/admin） | 已有，继续用 |
-| 商家桌面(Win/macOS) | **Tauri** 包壳 Next Web | 绿地（替代废弃的 electron monorepo） |
+| 商家桌面(Win/macOS) | **Tauri** 包壳 Next Web（**仅 brand**；admin 桌面按需后置） | 绿地（替代废弃的 electron monorepo） |
 | 商家移动(iOS/Android) | **React Native (Expo)** 真原生 | 绿地 |
 | 学员小程序(微信) | **Taro**（React 系） | 绿地 |
 | 学员 H5(公众号) | **Taro 编译 H5** | **替代现有 `apps/app` 的 Next H5** |
@@ -91,7 +91,7 @@ web/  (pnpm + Turborepo)
 │   ├── types/            (现有)
 │   ├── core/             业务逻辑内核           ← 新
 │   └── config/           (现有)
-└── 桌面：brand/admin 各加 src-tauri/，Tauri 包壳，不单开 app
+└── 桌面：brand 加 src-tauri/（admin 按需后置），Tauri 包壳，不单开 app
 ```
 
 一次性接入成本：RN 的 Metro 要配 `watchFolders`、Taro 要配 `sourceRoot`/hoisting。**逃生舱**：若 RN 的 Metro 在 monorepo 里折腾不动，`merchant-mobile` 最独立，后期单独拆仓成本最低——但不要一开始就拆。
@@ -104,7 +104,7 @@ web/  (pnpm + Turborepo)
 |---|---|---|
 | **P0 地基** | 抽 `packages/core`（收编分散在 brand/app 的业务逻辑：notification-format、金额时间、zod、权限码常量）+ 定义 Storage/Http/Auth 注入接口 | 后面每端都靠它，先立地基 |
 | **P1 学员端** | `learner-taro`：Taro → 微信小程序 + 公众号 H5，迁移现有 `apps/app` 页面；旧 Next app 待 Taro H5 验收通过后退役 | 当前最大产品缺口（真小程序=0）；且**首次真实验证内核跨 Taro 运行时** |
-| **P2 桌面** | brand/admin 加 Tauri 壳 → Win/macOS | 最便宜（包壳现有 Web），快速凑齐"桌面端" |
+| **P2 桌面** | brand 加 Tauri 壳 → Win/macOS（admin 桌面按需后置）；同时归档废弃的 `mini_schedule_web_electron` | 最便宜（包壳现有 Web），快速凑齐"桌面端"；商家场景才需要桌面，admin 是平台运营工具 |
 | **P3 移动** | `merchant-mobile`：React Native (Expo) 真原生，先做高频屏（登录、今日工作台、排课、现场签到扫码） | 最贵、体验要求最高，放最后；内核已被 Taro 验证，RN 复用顺 |
 | **P4 扩端** | Taro 加编译目标：抖音 / 支付宝小程序 | 一套 Taro 代码，边际成本低，按业务开 |
 
@@ -118,6 +118,11 @@ web/  (pnpm + Turborepo)
 | Tauri 学习成本 | Rust 壳（基本不写 Rust） | 桌面=包 Web + 少量原生(托盘/自动更新)；折不动退回 Electron（可逆） |
 | RN 现场能力 | 扫码签到/拍照是移动真原生核心价值 | Expo 生态（expo-camera/barcode）成熟；正是移动值得上 RN 而非 WebView 的落点 |
 | 微信支付/订阅消息 | 小程序支付、订阅消息模板 | 卡真实商户号 + per-brand 模板审核（已知 P0）；框架层先留接口，不阻塞 UI |
+| Tauri 加载模式 | 静态导出会失去 Next rewrites 同源代理 → 客户端直连后端触发 CORS（`cors.allowed_origins` keysToBind 已知坑） | **P2 采用远程 URL 模式**（壳加载线上站点，同源代理保留；离线能力非 v1 目标）；不走静态导出 |
+| `packages/api` 的 web 耦合 | api 包 import `sonner`(toast) + `localStorage`，RN/小程序**无法直接消费** | 演进路径：领域函数逐步下沉 core（走 `HttpClient` 端口 + 未来 `Notifier` 端口），api 退化为 Web 适配器 + react-query hooks；由 P1 首个真实消费者驱动，不提前重构 |
+| 登录后端前置 | 现 app 端仅 `POST /auth/wechat-login`（H5/mock 形态）；真小程序需 `code2session`、公众号 H5 需网页授权(snsapi) | P1 契约必须包含后端登录端点补齐，先于前端页面开发 |
+| `HttpClient` 错误语义未定 | 端口未定义 `code != OK` 时 resolve 还是 throw、toast 归属哪层 | **P1 spec 的第一个决策点**：(a) 始终 resolve envelope、业务错误交调用方 + `Notifier` 端口负责 toast，或 (b) throw 类型化错误。二选一后全端统一，不允许各端各表 |
+| 版本锚定 | Taro/Expo 对 pnpm monorepo 的兼容性随版本波动 | P1 锚定 Taro 4.x、P3 锚定当期 Expo SDK；接入时锁 minor 版本，升级走独立小批次 |
 
 ## 7. 不做什么（YAGNI / 明确排除）
 
@@ -137,3 +142,13 @@ web/  (pnpm + Turborepo)
 ## 9. 下一步
 
 本蓝图确认后，进入 **P0（抽 `packages/core`）** 的实施计划（writing-plans）。后续每阶段各自 grill→spec→plan→TDD→code-review。
+
+## 10. 修订记录
+
+### 2026-07-13 · P0 执行后 Fable 5 复盘审查
+
+P0（plan `2026-07-13-p0-shared-core.md`）已执行完成、零回归。复盘审查产生以下蓝图修订：
+
+1. **P2 范围收窄**：桌面壳只做 brand（商家场景才需要桌面；admin 是平台运营工具，按需后置）；P2 同时归档废弃的 `mini_schedule_web_electron` 仓。
+2. **风险表新增 5 行**（§6）：Tauri 加载模式（定为远程 URL）、`packages/api` web 耦合的演进路径、小程序/公众号登录的后端前置、`HttpClient` 错误语义决策点（P1 spec 首个决策）、Taro/Expo 版本锚定。
+3. **P0 交付物修正一处缺陷**：`core/ports.ts` 的 `HttpRequest.method` 补 `'PATCH'`（后端/web 客户端已大量使用 PATCH，端口若缺则各端实现无法覆盖既有 API 面）。
