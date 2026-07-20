@@ -987,3 +987,27 @@ Expected: 无未提交改动（`dist/` 已被 learner-taro/.gitignore 忽略）�
 **类型一致性**：`CoreApiError(code, message, details)` 三处使用一致；`createAuthTokenStore` 在 Task 1 定义、Task 5 lib/api.ts 使用；`ApiClient` 动词五个（含 P0 审查补的 PATCH）与 client.test.ts 断言一致；`wechatLogin/getMyProfile` 签名在 Task 3 定义与 Task 6 页面使用一致；`storage/authStore/api/DEFAULT_BRAND_ID/REFRESH_TOKEN_KEY` 导出名在 Task 5 定义与 Task 6 import 一致。
 
 **已知不确定点（执行时按报告规则处置，不擅自改设计）**：`@tarojs/cli` 的 `defineConfig` 导出与 `compile.include` 的确切 schema 随 4.x 小版本可能有差异——Task 4 已给降级写法与"报告确切报错"的停止条件；react-query 在 weapp 的兼容性由 Task 6 Step 5 冒烟裁决（兜底在 spec 风险表）。
+
+---
+
+## 执行记录（2026-07-20，Subagent-Driven，每 task 独立 subagent + 主线程复核）
+
+| Task | Commit (web dev) | 验证 / 偏差 |
+|---|---|---|
+| 1 errors+Notifier+authStore | `008edf7` | 11 tests + tsc 绿；偏差：makeAuthTokenStore call site 实为 1 处非 2 处 |
+| 2 createApiClient | `dc7d144` | 16 tests + tsc 绿；偏差：计划测试代码的 `unknown` err 需 isCoreApiError 守卫收窄（语义不变） |
+| 3 学员域 auth+profile | `fe77853` | 19 tests + tsc 绿；零偏差 |
+| 4 Taro 脚手架 | `0d1eb34` | **Taro 4.2.0** 全线锁定；weapp 1.97s / h5 3.9s 双目标构建通过（h5 仅体积建议 warning 298KiB）。subagent 中途被会话限额切断，主线程接手收尾。偏差：①构建要求补 `@babel/preset-react` devDep；②`.swc` 缓存补入 gitignore；③根 `.gitignore` 的 `.env*` 挡了 Taro 公开构建配置 → force-add（localhost+dev 品牌默认值，零机密） |
+| 5 三端口适配器+api 单例 | `e3284d2` | 双目标构建 + tsc 绿（agent 主动补 tsc——未被入口引用的文件 webpack 不查）；零偏差 |
+| 6 登录+首页 | `498b216` | **react-query weapp 冒烟裁决通过**（无 DOM 引用错误）；双目标构建 + tsc 绿；零偏差 |
+| 7 零回归验收 | —（纯验证） | core 6 文件 19 tests + tsc 绿；brand build ✓(30 页)；admin build ✓(13 页)；工作树干净 |
+
+**手动验收（人工执行）**：
+```
+① cd backend && CONFIG_PATH=configs/config-app.yaml go run ./cmd/api-app/   (:8082)
+② cd web && pnpm --filter @mini-schedule/learner-taro dev:weapp
+   微信开发者工具 → 导入 web/apps/learner-taro（appid=touristappid）
+   → 登录页：品牌ID=21、登录码任意字符串 → 跳首页显示昵称
+③ pnpm --filter @mini-schedule/learner-taro dev:h5 → 浏览器同流程（devServer proxy 同源，无 CORS）
+④ 退出登录 → 回登录页；直访首页 → 「未登录」兜底
+```
